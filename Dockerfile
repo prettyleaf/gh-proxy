@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.23-alpine AS build
+# The binary is pure Go, so the build stage always runs on the native
+# architecture of the runner and cross-compiles. No QEMU, no per-arch runners.
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
 
 RUN apk add --no-cache ca-certificates
 
@@ -11,7 +13,9 @@ COPY cmd ./cmd
 COPY internal ./internal
 
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build \
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -trimpath \
         -ldflags "-s -w -X main.version=${VERSION}" \
         -o /out/gh-proxy ./cmd/gh-proxy

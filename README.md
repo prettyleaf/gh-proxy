@@ -1,50 +1,62 @@
 # gh-proxy
 
-Приватный ускоритель загрузок с GitHub на Go. Переписанный
-[hunshcn/gh-proxy](https://github.com/hunshcn/gh-proxy) с тремя отличиями:
-монтируется **на путь**, а не на корень; **не выдаёт своего существования**;
-работает **только по токену**.
+*[Русская версия](README.ru.md)*
+
+Put your own server in front of GitHub. Prefix any `github.com` URL with the
+address of your proxy and the transfer — a release asset, a raw file, a branch
+tarball, a `git clone` — goes through your machine instead of the client's
+connection. Useful wherever GitHub is slow, throttled or unreachable, and for
+pulling private repositories onto hosts that hold no credentials of their own.
 
 ```
-https://sub.example.com/ivanghproxy/ТОКЕН/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz
-└──────── ваш сайт ────┘└─ префикс ─┘└───┘ └──────────────── обычный GitHub-URL ─────────────────────────┘
-                                    токен
+https://sub.example.com/ivanghproxy/TOKEN/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz
+└──────── your site ───┘└─ prefix ──┘└───┘ └──────────────── an ordinary GitHub URL ──────────────────────┘
+                                    token
 ```
 
-Один статический бинарь, ноль зависимостей кроме стандартной библиотеки Go,
-образ на `scratch` весом ~6 МБ.
+A rewrite of [hunshcn/gh-proxy](https://github.com/hunshcn/gh-proxy) in Go with
+three differences: it mounts **on a path** rather than the domain root, so it
+lives next to an existing site; it **never announces itself** — anything
+unauthenticated is a plain `404`; and it is **token-gated by default**.
 
-## Что умеет
+One static binary, no dependencies beyond the Go standard library, a `scratch`
+image of ~6 MB.
 
-* релизы, архивы веток и тегов, `blob`/`raw`, gist;
-* `git clone` и `fetch` (git smart HTTP) — без настройки git;
-  `push` тоже проходит, но только если задан `GHP_UPSTREAM_TOKEN` с правом
-  записи: собственные креденшелы клиента до GitHub не доезжают, их вырезают;
-* докачка и параллельная загрузка (`Range` проходит насквозь);
-* серверное следование редиректам на CDN-бэкенды GitHub — клиенту не нужен
-  доступ к `objects.githubusercontent.com`;
-* приватные репозитории через собственный PAT (`GHP_UPSTREAM_TOKEN`);
-* ограничение по владельцам/репозиториям (allow/deny-листы).
+## What it does
 
-## Быстрый старт
+* releases, branch and tag archives, `blob`/`raw`, gists;
+* `git clone` and `fetch` (git smart HTTP) with no git configuration;
+  `push` works too, but only with a write-capable `GHP_UPSTREAM_TOKEN`: the
+  client's own credentials are stripped and never reach GitHub;
+* resumable and parallel downloads (`Range` passes through);
+* server-side redirect following to GitHub's CDN backends — the client needs no
+  access to `objects.githubusercontent.com`;
+* private repositories through your own PAT (`GHP_UPSTREAM_TOKEN`);
+* restriction by owner/repository (allow and deny lists).
+
+## Quick start
 
 ```bash
 git clone https://github.com/prettyleaf/gh-proxy && cd gh-proxy
 
 cp .env.example .env
 printf 'GHP_TOKEN=%s\n' "$(openssl rand -hex 24)" >> .env
-$EDITOR .env                      # как минимум задайте GHP_PREFIX
+$EDITOR .env                      # at minimum, set GHP_PREFIX
 
 docker compose up -d --build
 ```
 
-Затем в nginx — **точно так**, каждая строка важна:
+To skip the build, set `image: ghcr.io/prettyleaf/gh-proxy:latest` in
+`docker-compose.yml` and drop the `build:` block — tagged releases are published
+to GHCR by [.github/workflows/docker.yml](.github/workflows/docker.yml).
+
+Then in nginx — **exactly like this**, every line matters:
 
 ```nginx
 location = /ivanghproxy { return 404; }
 
 location /ivanghproxy/ {
-    proxy_pass http://127.0.0.1:8899;      # без слеша и без URI на конце!
+    proxy_pass http://127.0.0.1:8899;      # no trailing slash, no URI!
 
     proxy_http_version 1.1;
     proxy_set_header Connection "";
@@ -63,10 +75,10 @@ location /ivanghproxy/ {
 }
 ```
 
-Проверка:
+Check:
 
 ```bash
-BASE='https://sub.example.com/ivanghproxy/ВАШ_ТОКЕН'
+BASE='https://sub.example.com/ivanghproxy/YOUR_TOKEN'
 
 curl -LO "$BASE/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz"
 git clone "$BASE/https://github.com/cli/browser"
@@ -74,94 +86,122 @@ git clone "$BASE/https://github.com/cli/browser"
 curl -s -o /dev/null -w '%{http_code}\n' https://sub.example.com/ivanghproxy/   # 404
 ```
 
-**Почему `proxy_pass` без слеша, почему `proxy_buffering off`, почему
-`access_log off` — [docs/nginx.md](docs/nginx.md).** Это основной документ:
-именно там ломается монтирование на сабпуть.
+**Why `proxy_pass` without a slash, why `proxy_buffering off`, why
+`access_log off` — [docs/nginx.md](docs/nginx.md).** That is the primary
+document: mounting on a subpath is where this breaks.
 
-## Документация
+## Documentation
+
+The documents below are in Russian.
 
 | | |
 |---|---|
-| [docs/nginx.md](docs/nginx.md) | монтирование на путь: рабочий конфиг, разбор каждой директивы, проверка, диагностика, Caddy/Traefik/Cloudflare |
+| [docs/nginx.md](docs/nginx.md) | mounting on a path: working config, every directive explained, verification, troubleshooting, Caddy/Traefik/Cloudflare |
 | [docs/clients.md](docs/clients.md) | git, curl, wget, aria2, `insteadOf`, CI, Dockerfile |
-| [docs/security.md](docs/security.md) | модель угроз: стелс-404, утечки токена, границы SSRF, что не уезжает на GitHub |
+| [docs/security.md](docs/security.md) | threat model: stealth 404, token leaks, SSRF boundaries, what never reaches GitHub |
 
-## Как передаётся токен
+## How the token is passed
 
-Четыре равнозначных способа:
+Four equivalent ways:
 
 ```bash
-# сегмент пути — основной, единственный работающий с git из коробки
+# path segment — the primary one, and the only one git handles out of the box
 curl "$BASE/https://raw.githubusercontent.com/cli/cli/trunk/README.md"
 
-# заголовки — для curl/wget/CI
-curl -H "Authorization: Bearer ТОКЕН"  "https://sub.example.com/ivanghproxy/https://..."
-curl -u "x:ТОКЕН"                      "https://sub.example.com/ivanghproxy/https://..."
-curl -H "X-Proxy-Token: ТОКЕН"         "https://sub.example.com/ivanghproxy/https://..."
+# headers — for curl/wget/CI
+curl -H "Authorization: Bearer TOKEN"  "https://sub.example.com/ivanghproxy/https://..."
+curl -u "x:TOKEN"                      "https://sub.example.com/ivanghproxy/https://..."
+curl -H "X-Proxy-Token: TOKEN"         "https://sub.example.com/ivanghproxy/https://..."
 ```
 
-Токен в пути нужен потому, что прокси отвечает `404`, а не `401`: git делает
-первый запрос без креденшелов и ждёт `401 WWW-Authenticate`, чтобы понять, что
-надо авторизоваться. Стелс-404 такого вызова не шлёт — а токен, уже вписанный в
-URL, делает обмен ненужным.
+The token belongs in the path because the proxy answers `404` rather than `401`:
+git makes its first request without credentials and waits for a
+`401 WWW-Authenticate` to learn that it should authenticate. A stealth 404 never
+issues that challenge — and a token already written into the URL makes the
+exchange unnecessary.
 
-## Настройки
+## Running without a token
 
-Все — переменные окружения; полный список с комментариями в
+`GHP_ALLOW_ANONYMOUS=1` disables authentication entirely. `GHP_TOKEN` must then
+be empty; setting both is a startup error, as is setting neither — the proxy
+refuses to boot rather than quietly turn into an open relay.
+
+```bash
+GHP_ALLOW_ANONYMOUS=1 GHP_PREFIX=/ivanghproxy/ ./bin/gh-proxy
+```
+
+No token segment is consumed from the path, so the URL is just the prefix
+followed by the GitHub URL:
+
+```bash
+BASE='https://sub.example.com/ivanghproxy'
+curl -LO "$BASE/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz"
+```
+
+Only do this when something else already controls who reaches the listener — a
+VPN, an IP allow list, mTLS, or a bind to a private interface. On the public
+internet an anonymous instance is bandwidth for whoever finds it, and your IP in
+someone else's logs. Pair it with `GHP_ALLOW_LIST` to at least bound what can be
+fetched, and keep `GHP_UPSTREAM_TOKEN` unset: without authentication, that PAT
+would be handed to every caller's requests.
+
+## Settings
+
+All of them are environment variables; the full annotated list is in
 [.env.example](.env.example).
 
-| Переменная | По умолчанию | |
+| Variable | Default | |
 |---|---|---|
-| `GHP_TOKEN` | — | **обязательно**. Секрет, ≥16 символов, без `/?#` и пробелов |
-| `GHP_TOKEN_FILE` | — | прочитать токен из файла (docker secrets) |
-| `GHP_PREFIX` | `/` | точка монтирования, должна совпадать с `location` |
-| `GHP_LISTEN` | `0.0.0.0:8899` | публичный listener |
-| `GHP_ADMIN_LISTEN` | `127.0.0.1:8900` | `/healthz`, наружу не публикуется |
-| `GHP_ALLOW_LIST` | пусто | `ivan`, `ivan/repo`, `*/repo` — пусто значит «любые» |
-| `GHP_DENY_LIST` | пусто | то же, применяется после allow-листа |
-| `GHP_UPSTREAM_TOKEN` | — | GitHub PAT для приватных репозиториев и лимитов |
-| `GHP_SIZE_LIMIT` | `0` | больше лимита → `302` на настоящий GitHub. `512MB`, `2GB` |
-| `GHP_REDIRECT_HOSTS` | CDN GitHub | куда можно следовать за редиректом (**заменяет** дефолт) |
+| `GHP_TOKEN` | — | **required** unless `GHP_ALLOW_ANONYMOUS=1`. Secret, ≥16 characters, no `/?#` or spaces |
+| `GHP_TOKEN_FILE` | — | read the token from a file (docker secrets) |
+| `GHP_PREFIX` | `/` | mount point, must match the nginx `location` |
+| `GHP_LISTEN` | `0.0.0.0:8899` | public listener |
+| `GHP_ADMIN_LISTEN` | `127.0.0.1:8900` | `/healthz`, never published |
+| `GHP_ALLOW_LIST` | empty | `ivan`, `ivan/repo`, `*/repo` — empty means "any" |
+| `GHP_DENY_LIST` | empty | same syntax, applied after the allow list |
+| `GHP_UPSTREAM_TOKEN` | — | GitHub PAT for private repos and rate limits |
+| `GHP_SIZE_LIMIT` | `0` | over the limit → `302` to the real GitHub. `512MB`, `2GB` |
+| `GHP_REDIRECT_HOSTS` | GitHub CDNs | where redirects may be followed (**replaces** the default) |
 | `GHP_MAX_REDIRECTS` | `5` | |
-| `GHP_CORS` | `0` | разрешить `fetch()` из браузера |
-| `GHP_LOG_TARGETS` | `0` | писать URL-ы в лог (при токене в пути это лог секретов) |
-| `GHP_ALLOW_ANONYMOUS` | `0` | выключить аутентификацию — открытый релей |
+| `GHP_CORS` | `0` | allow `fetch()` from a browser |
+| `GHP_LOG_TARGETS` | `0` | log upstream URLs (with a token in the path, that logs secrets) |
+| `GHP_ALLOW_ANONYMOUS` | `0` | disable authentication — open relay |
 
-## Отличия от оригинала
+## Differences from the original
 
-| | hunshcn/gh-proxy | здесь |
+| | hunshcn/gh-proxy | here |
 |---|---|---|
-| Язык | Python + Flask + uwsgi | Go, один бинарь, без зависимостей |
-| Монтирование | только `/` (префикс есть лишь в CF Worker) | `GHP_PREFIX`, документировано для nginx |
-| Доступ | открыт по умолчанию | токен обязателен, старт без него невозможен |
-| Ответ на отказ | `403` с текстом причины | `404`, одинаковый для всех причин |
-| Главная страница | тянет HTML с `hunshcn.github.io` при старте | нет |
-| Проверка URL | regex, `.+?` может проглотить слеш | точное сравнение хоста + разбор по сегментам |
-| Заголовки | проксируются как есть | вырезаются `Set-Cookie`, `Authorization`, `Referer`, `X-Forwarded-*` |
-| Редиректы | следует за любым хостом | только allow-list, только `GET`/`HEAD` |
+| Language | Python + Flask + uwsgi | Go, one binary, no dependencies |
+| Mounting | `/` only (a prefix exists in the CF Worker alone) | `GHP_PREFIX`, documented for nginx |
+| Access | open by default | token required by default; open mode only via an explicit flag |
+| Refusal | `403` with the reason in the body | `404`, identical for every reason |
+| Landing page | fetches HTML from `hunshcn.github.io` at startup | none |
+| URL validation | regex, `.+?` can swallow a slash | exact host comparison plus segment parsing |
+| Headers | proxied as-is | `Set-Cookie`, `Authorization`, `Referer`, `X-Forwarded-*` stripped |
+| Redirects | follows any host | allow-list only, `GET`/`HEAD` only |
 
-**Выброшено намеренно:** редирект на jsDelivr (`jsdelivr`, `pass_list` в
-оригинале). Он отправляет клиента на публичный CDN — для приватного прокси это
-обнуляет и приватность, и смысл.
+**Deliberately dropped:** the jsDelivr redirect (`jsdelivr`, `pass_list` in the
+original). It sends the client off to a public CDN, which for a private proxy
+cancels both the privacy and the point.
 
-## Разработка
+## Development
 
 ```bash
 make test      # go test ./...
 make race      # go test -race
 make lint      # go vet + gofmt
 make build     # bin/gh-proxy
-make run       # локальный запуск с временным токеном
+make run       # local run with a throwaway token
 make token     # openssl rand -hex 24
 ```
 
-Локально без Docker:
+Locally without Docker:
 
 ```bash
 GHP_TOKEN=local-dev-token-0123456789 GHP_PREFIX=/ivanghproxy/ \
 GHP_LISTEN=127.0.0.1:8899 ./bin/gh-proxy
 ```
 
-## Лицензия
+## License
 
 MIT
