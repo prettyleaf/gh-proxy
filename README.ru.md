@@ -18,7 +18,8 @@ https://sub.example.com/ivanghproxy/ТОКЕН/https://github.com/cli/cli/releas
 * докачка и параллельная загрузка (`Range` проходит насквозь);
 * серверное следование редиректам на CDN-бэкенды GitHub;
 * приватные репозитории через собственный PAT (`GHP_UPSTREAM_TOKEN`);
-* ограничение по владельцам/репозиториям (allow/deny-листы).
+* ограничение по владельцам/репозиториям (allow/deny-листы);
+* опциональная [короткая форма URL](#короткая-форма) — без `https://github.com` в ссылке.
 
 ## Быстрый старт
 
@@ -95,6 +96,39 @@ curl -H "X-Proxy-Token: ТОКЕН"         "https://sub.example.com/ivanghproxy
 
 Токен в пути нужен потому, что прокси отвечает `404`, а не `401`: git делает первый запрос без креденшелов и ждёт `401 WWW-Authenticate`, чтобы понять, что надо авторизоваться. Стелс-404 такого вызова не шлёт — а токен, уже вписанный в URL, делает обмен ненужным.
 
+## Короткая форма
+
+`GHP_DEFAULT_HOST` разрешает не писать хост: точка монтирования начинает
+изображать сам GitHub, и ссылка — это обычный GitHub-URL с отрезанным хостом.
+
+```bash
+GHP_DEFAULT_HOST=github.com,raw.githubusercontent.com
+```
+
+```
+https://github.com/prettyleaf/media/blob/main/logo.png
+https://sub.example.com/ivanghproxy/ТОКЕН/prettyleaf/media/blob/main/logo.png   # тот же файл
+```
+
+Хосты перебираются по порядку: сначала формы `github.com` (`blob`/`raw`, релизы,
+архивы, теги, git), затем `raw.githubusercontent.com` — поэтому голый
+`/owner/repo/ref/path` тоже работает:
+
+```bash
+curl -O "$BASE/prettyleaf/media/main/logo.png"          # -> raw.githubusercontent.com
+curl -LO "$BASE/cli/cli/releases/download/v1/gh.tar.gz" # -> github.com
+git clone "$BASE/cli/browser"
+```
+
+Принимаются только те хосты, с которыми прокси и так разговаривает; любой другой —
+ошибка старта. URL, в котором хост указан, сохраняет свой смысл: он никогда не
+перечитывается как имя владельца.
+
+По умолчанию пусто, и включать стоит только если нужно именно зеркало: тогда
+любой путь `/owner/repo/...` под точкой монтирования уезжает на GitHub, а значит
+при `GHP_PREFIX=/` на домене, где живёт что-то ещё, прокси затенит настоящие
+пути. Префикс и токен продолжают гейтить доступ.
+
 ## Вариант без токена
 
 `GHP_ALLOW_ANONYMOUS=1` полностью выключает аутентификацию. `GHP_TOKEN` при этом
@@ -127,6 +161,7 @@ curl -LO "$BASE/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_l
 | `GHP_ADMIN_LISTEN` | `127.0.0.1:8900` | `/healthz`, наружу не публикуется |
 | `GHP_ALLOW_LIST` | пусто | `ivan`, `ivan/repo`, `*/repo` — пусто значит «любые» |
 | `GHP_DENY_LIST` | пусто | то же, применяется после allow-листа |
+| `GHP_DEFAULT_HOST` | пусто | хосты, которые подставляются, если в URL хоста нет, по порядку: `github.com,raw.githubusercontent.com`. См. [короткую форму](#короткая-форма) |
 | `GHP_UPSTREAM_TOKEN` | — | GitHub PAT для приватных репозиториев и лимитов |
 | `GHP_SIZE_LIMIT` | `0` | больше лимита → `302` на настоящий GitHub. `512MB`, `2GB` |
 | `GHP_REDIRECT_HOSTS` | CDN GitHub | куда можно следовать за редиректом (**заменяет** дефолт) |

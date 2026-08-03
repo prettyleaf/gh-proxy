@@ -28,6 +28,10 @@ type Config struct {
 	AllowList ghurl.RuleSet // empty means no restriction
 	DenyList  ghurl.RuleSet
 
+	// DefaultHosts are tried, in order, when the requested URL names no host.
+	// Empty means the host is mandatory, which is the default.
+	DefaultHosts []string
+
 	UpstreamToken string // GitHub PAT used towards GitHub, if any
 	RedirectHosts map[string]bool
 	MaxRedirects  int
@@ -106,6 +110,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.DenyList, err = rules("GHP_DENY_LIST"); err != nil {
+		return nil, err
+	}
+	if c.DefaultHosts, err = defaultHosts("GHP_DEFAULT_HOST"); err != nil {
 		return nil, err
 	}
 
@@ -238,6 +245,21 @@ func envBytes(key string, def int64) (int64, error) {
 		return 0, fmt.Errorf("%s must not be negative", key)
 	}
 	return n * mult, nil
+}
+
+// defaultHosts parses the ordered fallback host list. A host outside the set
+// the proxy can talk to is a startup error rather than a silently ignored
+// setting: a typo here would otherwise look like "the short form just 404s".
+func defaultHosts(key string) ([]string, error) {
+	var hosts []string
+	for _, h := range splitList(os.Getenv(key)) {
+		h = strings.ToLower(h)
+		if !ghurl.SupportedHost(h) {
+			return nil, fmt.Errorf("%s: %q is not a proxyable host", key, h)
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, nil
 }
 
 func rules(key string) (ghurl.RuleSet, error) {

@@ -18,7 +18,8 @@ https://sub.example.com/ivanghproxy/TOKEN/https://github.com/cli/cli/releases/do
 * resumable and parallel downloads (`Range` passes through);
 * server-side redirect following to GitHub's CDN backends;
 * private repositories through your own PAT (`GHP_UPSTREAM_TOKEN`);
-* restriction by owner/repository (allow and deny lists).
+* restriction by owner/repository (allow and deny lists);
+* an optional [short URL form](#short-form) that drops the `https://github.com` part.
 
 ## Quick start
 
@@ -97,6 +98,41 @@ curl -H "X-Proxy-Token: TOKEN"         "https://sub.example.com/ivanghproxy/http
 
 The token belongs in the path because the proxy answers `404` rather than `401`: git makes its first request without credentials and waits for a `401 WWW-Authenticate` to learn that it should authenticate. A stealth 404 never issues that challenge — and a token already written into the URL makes the exchange unnecessary.
 
+## Short form
+
+<a id="short-form"></a>
+
+`GHP_DEFAULT_HOST` lets the mount point stand in for GitHub itself, so the URL is
+the GitHub one with the host chopped off:
+
+```bash
+GHP_DEFAULT_HOST=github.com,raw.githubusercontent.com
+```
+
+```
+https://github.com/prettyleaf/media/blob/main/logo.png
+https://sub.example.com/ivanghproxy/TOKEN/prettyleaf/media/blob/main/logo.png   # the same file
+```
+
+The hosts are tried in order: `github.com` shapes first (`blob`/`raw`, releases,
+archives, tags, git), then `raw.githubusercontent.com`, which is what makes a
+bare `/owner/repo/ref/path` work too:
+
+```bash
+curl -O "$BASE/prettyleaf/media/main/logo.png"          # -> raw.githubusercontent.com
+curl -LO "$BASE/cli/cli/releases/download/v1/gh.tar.gz" # -> github.com
+git clone "$BASE/cli/browser"
+```
+
+Only the hosts the proxy already talks to are accepted here; anything else is a
+startup error. A URL that does name a host keeps its meaning — it is never
+re-read as an owner name.
+
+Empty by default, and worth keeping that way unless you want a mirror: with it
+on, every `/owner/repo/...` path below the mount point is proxied, so it will
+shadow real paths if you mount at `GHP_PREFIX=/` on a domain that serves
+anything else. The prefix and the token still gate access.
+
 ## Running without a token
 
 `GHP_ALLOW_ANONYMOUS=1` disables authentication entirely. `GHP_TOKEN` must then
@@ -129,6 +165,7 @@ All of them are environment variables; the full annotated list is in
 | `GHP_ADMIN_LISTEN` | `127.0.0.1:8900` | `/healthz`, never published |
 | `GHP_ALLOW_LIST` | empty | `ivan`, `ivan/repo`, `*/repo` — empty means "any" |
 | `GHP_DENY_LIST` | empty | same syntax, applied after the allow list |
+| `GHP_DEFAULT_HOST` | empty | hosts tried when the URL names none, in order: `github.com,raw.githubusercontent.com`. See [short form](#short-form) |
 | `GHP_UPSTREAM_TOKEN` | — | GitHub PAT for private repos and rate limits |
 | `GHP_SIZE_LIMIT` | `0` | over the limit → `302` to the real GitHub. `512MB`, `2GB` |
 | `GHP_REDIRECT_HOSTS` | GitHub CDNs | where redirects may be followed (**replaces** the default) |

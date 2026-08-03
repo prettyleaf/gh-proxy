@@ -201,6 +201,50 @@ func TestLoadParsesAccessLists(t *testing.T) {
 	}
 }
 
+func TestLoadParsesDefaultHosts(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	t.Setenv("GHP_DEFAULT_HOST", "GitHub.com, raw.githubusercontent.com")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"github.com", "raw.githubusercontent.com"}
+	if len(cfg.DefaultHosts) != len(want) {
+		t.Fatalf("DefaultHosts = %v, want %v", cfg.DefaultHosts, want)
+	}
+	for i, h := range want {
+		if cfg.DefaultHosts[i] != h {
+			t.Errorf("DefaultHosts[%d] = %q, want %q (order decides which host wins)", i, cfg.DefaultHosts[i], h)
+		}
+	}
+}
+
+func TestLoadRejectsUnproxyableDefaultHost(t *testing.T) {
+	for _, h := range []string{"gitlab.com", "api.github.com", "127.0.0.1", "github.com.evil.example"} {
+		t.Run(h, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("GHP_TOKEN", goodToken)
+			t.Setenv("GHP_DEFAULT_HOST", h)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted GHP_DEFAULT_HOST=%q", h)
+			}
+		})
+	}
+}
+
+func TestLoadLeavesDefaultHostsUnsetByDefault(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.DefaultHosts) != 0 {
+		t.Errorf("DefaultHosts = %v, want empty: the short form is opt-in", cfg.DefaultHosts)
+	}
+}
+
 // clearEnv removes every GHP_ variable so a test starts from a known state.
 func clearEnv(t *testing.T) {
 	t.Helper()
@@ -209,6 +253,7 @@ func clearEnv(t *testing.T) {
 		"GHP_ALLOW_ANONYMOUS", "GHP_ALLOW_LIST", "GHP_DENY_LIST", "GHP_UPSTREAM_TOKEN",
 		"GHP_UPSTREAM_TOKEN_FILE", "GHP_REDIRECT_HOSTS", "GHP_MAX_REDIRECTS",
 		"GHP_SIZE_LIMIT", "GHP_CORS", "GHP_LOG_TARGETS", "GHP_LOG_LEVEL",
+		"GHP_DEFAULT_HOST",
 	} {
 		t.Setenv(k, "")
 	}
