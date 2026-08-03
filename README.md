@@ -1,12 +1,8 @@
 # gh-proxy
 
-*[Русская версия](README.ru.md)*
+EN | [RU](README.ru.md)
 
-Put your own server in front of GitHub. Prefix any `github.com` URL with the
-address of your proxy and the transfer — a release asset, a raw file, a branch
-tarball, a `git clone` — goes through your machine instead of the client's
-connection. Useful wherever GitHub is slow, throttled or unreachable, and for
-pulling private repositories onto hosts that hold no credentials of their own.
+[hunshcn/gh-proxy](https://github.com/hunshcn/gh-proxy) fork in Go combined with new features for personal preferences and purposes of other contributors or/and like-minded people. It mounts on a path rather than the domain root, so it lives next to an existing site; it never announces itself — anything unauthenticated is a plain `404`; and it is token-gated by default.
 
 ```
 https://sub.example.com/ivanghproxy/TOKEN/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz
@@ -14,23 +10,13 @@ https://sub.example.com/ivanghproxy/TOKEN/https://github.com/cli/cli/releases/do
                                     token
 ```
 
-A rewrite of [hunshcn/gh-proxy](https://github.com/hunshcn/gh-proxy) in Go with
-three differences: it mounts **on a path** rather than the domain root, so it
-lives next to an existing site; it **never announces itself** — anything
-unauthenticated is a plain `404`; and it is **token-gated by default**.
-
-One static binary, no dependencies beyond the Go standard library, a `scratch`
-image of ~6 MB.
-
 ## What it does
 
 * releases, branch and tag archives, `blob`/`raw`, gists;
 * `git clone` and `fetch` (git smart HTTP) with no git configuration;
-  `push` works too, but only with a write-capable `GHP_UPSTREAM_TOKEN`: the
-  client's own credentials are stripped and never reach GitHub;
+  `push` works too, but only with a write-capable `GHP_UPSTREAM_TOKEN`: the client's own credentials are stripped and never reach GitHub;
 * resumable and parallel downloads (`Range` passes through);
-* server-side redirect following to GitHub's CDN backends — the client needs no
-  access to `objects.githubusercontent.com`;
+* server-side redirect following to GitHub's CDN backends;
 * private repositories through your own PAT (`GHP_UPSTREAM_TOKEN`);
 * restriction by owner/repository (allow and deny lists).
 
@@ -40,27 +26,24 @@ image of ~6 MB.
 git clone https://github.com/prettyleaf/gh-proxy && cd gh-proxy
 
 cp .env.example .env
-printf 'GHP_TOKEN=%s\n' "$(openssl rand -hex 24)" >> .env
-$EDITOR .env                      # at minimum, set GHP_PREFIX
+openssl rand -hex 24 # set GHP_PREFIX in .env
 
-docker compose up -d --build
+docker compose up -d
 ```
 
-To skip the build, set `image: ghcr.io/prettyleaf/gh-proxy:latest` in
-`docker-compose.yml` and drop the `build:` block — tagged releases are published
-to GHCR by [.github/workflows/docker.yml](.github/workflows/docker.yml).
-
-Then in nginx — **exactly like this**, every line matters:
+## Reverse-proxy
 
 ```nginx
-location = /ivanghproxy { return 404; }
+location = /ivanghproxy {
+    return 404;
+  }
 
 location /ivanghproxy/ {
-    proxy_pass http://127.0.0.1:8899;      # no trailing slash, no URI!
+    proxy_pass http://127.0.0.1:8899;
 
     proxy_http_version 1.1;
     proxy_set_header Connection "";
-    proxy_set_header Host              $host;
+    proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
 
     proxy_buffering         off;
@@ -86,9 +69,7 @@ git clone "$BASE/https://github.com/cli/browser"
 curl -s -o /dev/null -w '%{http_code}\n' https://sub.example.com/ivanghproxy/   # 404
 ```
 
-**Why `proxy_pass` without a slash, why `proxy_buffering off`, why
-`access_log off` — [docs/nginx.md](docs/nginx.md).** That is the primary
-document: mounting on a subpath is where this breaks.
+See [docs/nginx.md](docs/nginx.md) for more info.
 
 ## Documentation
 
@@ -114,11 +95,7 @@ curl -u "x:TOKEN"                      "https://sub.example.com/ivanghproxy/http
 curl -H "X-Proxy-Token: TOKEN"         "https://sub.example.com/ivanghproxy/https://..."
 ```
 
-The token belongs in the path because the proxy answers `404` rather than `401`:
-git makes its first request without credentials and waits for a
-`401 WWW-Authenticate` to learn that it should authenticate. A stealth 404 never
-issues that challenge — and a token already written into the URL makes the
-exchange unnecessary.
+The token belongs in the path because the proxy answers `404` rather than `401`: git makes its first request without credentials and waits for a `401 WWW-Authenticate` to learn that it should authenticate. A stealth 404 never issues that challenge — and a token already written into the URL makes the exchange unnecessary.
 
 ## Running without a token
 
@@ -137,13 +114,6 @@ followed by the GitHub URL:
 BASE='https://sub.example.com/ivanghproxy'
 curl -LO "$BASE/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz"
 ```
-
-Only do this when something else already controls who reaches the listener — a
-VPN, an IP allow list, mTLS, or a bind to a private interface. On the public
-internet an anonymous instance is bandwidth for whoever finds it, and your IP in
-someone else's logs. Pair it with `GHP_ALLOW_LIST` to at least bound what can be
-fetched, and keep `GHP_UPSTREAM_TOKEN` unset: without authentication, that PAT
-would be handed to every caller's requests.
 
 ## Settings
 
@@ -166,23 +136,6 @@ All of them are environment variables; the full annotated list is in
 | `GHP_CORS` | `0` | allow `fetch()` from a browser |
 | `GHP_LOG_TARGETS` | `0` | log upstream URLs (with a token in the path, that logs secrets) |
 | `GHP_ALLOW_ANONYMOUS` | `0` | disable authentication — open relay |
-
-## Differences from the original
-
-| | hunshcn/gh-proxy | here |
-|---|---|---|
-| Language | Python + Flask + uwsgi | Go, one binary, no dependencies |
-| Mounting | `/` only (a prefix exists in the CF Worker alone) | `GHP_PREFIX`, documented for nginx |
-| Access | open by default | token required by default; open mode only via an explicit flag |
-| Refusal | `403` with the reason in the body | `404`, identical for every reason |
-| Landing page | fetches HTML from `hunshcn.github.io` at startup | none |
-| URL validation | regex, `.+?` can swallow a slash | exact host comparison plus segment parsing |
-| Headers | proxied as-is | `Set-Cookie`, `Authorization`, `Referer`, `X-Forwarded-*` stripped |
-| Redirects | follows any host | allow-list only, `GET`/`HEAD` only |
-
-**Deliberately dropped:** the jsDelivr redirect (`jsdelivr`, `pass_list` in the
-original). It sends the client off to a public CDN, which for a private proxy
-cancels both the privacy and the point.
 
 ## Development
 

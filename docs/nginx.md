@@ -1,15 +1,8 @@
 # Монтирование на путь за nginx
 
-Задача: повесить прокси на `https://sub.example.com/ivanghproxy/` рядом с уже
-работающим сайтом, ничего в нём не сломав и не выдав факт существования сервиса.
+Задача: повесить прокси на `https://sub.example.com/ivanghproxy/` рядом с уже работающим сайтом, ничего в нём не сломав и не выдав факт существования сервиса.
 
-Здесь ровно те грабли, на которых обычно ломается монтирование на сабпуть.
-Каждая строка конфига объяснена — если убрать любую из первых четырёх, что-то
-перестанет работать.
-
----
-
-## Рабочий конфиг
+## .conf
 
 ```nginx
 server {
@@ -19,14 +12,9 @@ server {
 
     server_tokens off;
 
-    # ... ваш существующий сайт: location / { ... } и всё остальное ...
-
-    # Запрос без завершающего слеша nginx по умолчанию редиректит на
-    # слеш-версию (301). Это подтверждает, что путь существует. Гасим молча.
     location = /ivanghproxy { return 404; }
 
     location /ivanghproxy/ {
-        # (1) БЕЗ URI-части после порта. Это главное. См. ниже.
         proxy_pass http://127.0.0.1:8899;
 
         proxy_http_version 1.1;
@@ -34,45 +22,27 @@ server {
         proxy_set_header Host              $host;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # (4) стриминг в обе стороны
         proxy_buffering         off;
         proxy_request_buffering off;
         client_max_body_size    0;
         proxy_read_timeout      1h;
         proxy_send_timeout      1h;
 
-        # Location от GitHub уже переписан приложением — nginx трогать не должен
         proxy_redirect off;
 
-        # (6) поисковикам тут делать нечего
         add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
 
-        # (5) токен лежит в пути: не пишем его в общий access.log
         access_log off;
     }
 }
 ```
 
-`GHP_PREFIX` в `.env` должен совпадать с `location` **посимвольно**:
+`GHP_PREFIX` в `.env` должен совпадать с `location`:
 `GHP_PREFIX=/ivanghproxy/`.
-
----
 
 ## Почему именно так
 
-### (1) `proxy_pass` без URI-части — самое важное
-
-```nginx
-proxy_pass http://127.0.0.1:8899;     # правильно
-proxy_pass http://127.0.0.1:8899/;    # СЛОМАЕТ ВСЁ
-```
-
-Документация nginx:
-
-> If `proxy_pass` is specified without a URI, the request URI is passed to the
-> server **in the same form as sent by a client** when the original request is
-> processed, or the full **normalized** request URI is passed when processing the
-> changed URI.
+If `proxy_pass` is specified without a URI, the request URI is passed to the server **in the same form as sent by a client** when the original request is processed, or the full **normalized** request URI is passed when processing the changed URI.
 
 Проксируемый URL выглядит так:
 
@@ -82,48 +52,22 @@ proxy_pass http://127.0.0.1:8899/;    # СЛОМАЕТ ВСЁ
                      двойной слеш                            percent-encoding
 ```
 
-«Same form as sent by a client» = сырой request-target: `//` на месте, `%20` не
-тронут. Ровно то, что нужно.
+«Same form as sent by a client» = сырой request-target: `//` на месте, `%20` не тронут. Ровно то, что нужно.
 
-Стоит дописать `/` в конце `proxy_pass` — и nginx переключается на
-**нормализованный** URI: схлопывает `//` в `/` и перекодирует
-escape-последовательности. `https://github.com` превращается в `https:/github.com`, а имя
-файла с `%2F` внутри — в путь с настоящим слешем.
+Стоит дописать `/` в конце `proxy_pass` — и nginx переключается на нормализованный URI: схлопывает `//` в `/` и перекодирует escape-последовательности. `https://github.com` превращается в `https:/github.com`, а имя файла с `%2F` внутри — в путь с настоящим слешем.
 
-> Приложение чинит `https:/` → `https://` самостоятельно (`RepairScheme`), так
-> что схлопнутая схема не фатальна. А вот перекодирование `%XX` чинить нечем —
-> имя файла релиза приедет на GitHub другим, и вы получите 404 от GitHub.
-
-### (2) Никаких `rewrite`, `try_files` или `return` внутри этого `location`
-
-Любая из этих директив создаёт «changed URI», и nginx по той же цитате из
-документации начинает слать апстриму нормализованную форму — эффект точно такой
-же, как в пункте (1). В частности, **не** пытайтесь срезать префикс через
+Любая из этих директив создаёт «changed URI», и nginx по той же цитате из документации начинает слать апстриму нормализованную форму — эффект точно такой же, как в пункте. В частности, не пытайтесь срезать префикс через
 
 ```nginx
 location /ivanghproxy/ {
-    rewrite ^/ivanghproxy/(.*) /$1 break;   # НЕ НАДО
+    rewrite ^/ivanghproxy/(.*) /$1 break;
     proxy_pass http://127.0.0.1:8899;
 }
 ```
 
 Префикс срезает само приложение — для этого и существует `GHP_PREFIX`.
 
-### (3) `merge_slashes` трогать не нужно
-
-Частый совет в интернете — `merge_slashes off`. Здесь он не нужен и вреден:
-
-* Директива имеет контекст только `http` и `server`, то есть отключение
-  затронет **весь** виртуальный хост, а не один `location`. Документация nginx
-  прямо предупреждает: «for security considerations, it is better to avoid
-  disabling this feature».
-* Схлопывание влияет на **матчинг** location, а не на то, что уходит апстриму.
-  Префикс `/ivanghproxy/` совпадёт в любом случае, а по пункту (1) апстриму
-  уезжает оригинал.
-
-Оставьте дефолтный `merge_slashes on`.
-
-### (4) Стриминг: три директивы, без которых ломается git и большие файлы
+Три директивы, без которых ломается git и большие файлы:
 
 | Директива | Что будет без неё |
 |---|---|
@@ -131,20 +75,14 @@ location /ivanghproxy/ {
 | `proxy_request_buffering off` | nginx сначала целиком принимает тело `POST /git-upload-pack`, потом шлёт — на больших репах это таймаут |
 | `client_max_body_size 0` | `413 Request Entity Too Large` на `git push` и на больших запросах upload-pack (дефолт всего 1 МБ) |
 
-`proxy_read_timeout`/`proxy_send_timeout` подняты до часа, потому что при
-`git clone` большого репозитория GitHub может молчать несколько минут, пока
-считает pack.
+`proxy_read_timeout`/`proxy_send_timeout` подняты до часа, потому что при `git clone` большого репозитория GitHub может молчать несколько минут, пока считает pack.
 
-### (5) `access_log off` — иначе токен утекает в лог
-
-При токене-в-пути (`/ivanghproxy/TOKEN/https://...`) дефолтный `combined`
-формат сохраняет секрет открытым текстом в файл, который читает кто угодно с
-доступом к серверу и который попадает в ротацию и бэкапы.
+При токене-в-пути (`/ivanghproxy/TOKEN/https://...`) дефолтный `combined` формат сохраняет секрет открытым текстом в файл, который читает кто угодно с доступом к серверу и который попадает в ротацию и бэкапы.
 
 Варианты:
 
 ```nginx
-access_log off;                       # проще всего
+access_log off;
 ```
 
 или, если статистика всё же нужна:
@@ -159,21 +97,17 @@ access_log /var/log/nginx/ghproxy.log ghproxy;
 
 Само приложение URL-ы не логирует: `GHP_LOG_TARGETS=0` по умолчанию.
 
-### (6) Не добавляйте путь в `robots.txt`
+### robots.txt
 
 ```
 Disallow: /ivanghproxy/     # это публикация секретного пути, а не защита
 ```
 
-`robots.txt` читается всеми и первым делом. Для той же цели служит заголовок
-`X-Robots-Tag: noindex` — приложение ставит его само, в конфиге он продублирован
-на случай ответов, сгенерированных nginx.
+`robots.txt` читается всеми и первым делом. Для той же цели служит заголовок `X-Robots-Tag: noindex` — приложение ставит его само, в конфиге он продублирован на случай ответов, сгенерированных nginx.
 
 > Обратите внимание: `add_header` в `location` отменяет все `add_header`,
 > унаследованные с уровня `server`. Если у вас там HSTS и прочее — продублируйте
 > их в этом блоке.
-
----
 
 ## Проверка
 
@@ -208,8 +142,6 @@ git clone --depth 1 "$BASE/https://github.com/cli/browser" /tmp/probe && rm -rf 
 sudo grep -c "ВАШ_ТОКЕН" /var/log/nginx/*.log    # 0
 ```
 
----
-
 ## Диагностика
 
 | Симптом | Причина |
@@ -232,8 +164,6 @@ docker compose logs -f gh-proxy
 `GHP_LOG_TARGETS=1` (покажет upstream-URL в ошибках). **Оба возвращайте обратно
 после отладки** — вместе они пишут в лог полные URL.
 
----
-
 ## Другие фронтенды
 
 ### Caddy
@@ -253,25 +183,12 @@ sub.example.com {
 схлопывает `//` — приложение чинит это само, но **percent-encoding Caddy
 сохраняет**, так что имена файлов не страдают.
 
-### Traefik (labels)
-
-```yaml
-labels:
-  - "traefik.http.routers.ghproxy.rule=Host(`sub.example.com`) && PathPrefix(`/ivanghproxy`)"
-  - "traefik.http.services.ghproxy.loadbalancer.server.port=8899"
-  - "traefik.http.services.ghproxy.loadbalancer.responseForwarding.flushInterval=1ms"
-```
-
-Префикс Traefik не срезает, поэтому `GHP_PREFIX=/ivanghproxy/`.
-
 ### Cloudflare перед nginx
 
 Cloudflare нормализует URL и схлопнет `//`. Приложение это чинит, но учтите два
 момента: Cloudflare кэширует ответы (включая приватные файлы — настройте Cache
 Rules на bypass для этого пути) и обрывает соединение по таймауту 100 секунд на
 свободном тарифе, чего может не хватить для большого `git clone`.
-
----
 
 ## Необязательное усиление
 
