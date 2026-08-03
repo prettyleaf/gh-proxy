@@ -37,6 +37,28 @@ aria2c -x8 "$BASE/https://github.com/.../big.tar.gz"
 
 `/blob/` автоматически превращается в `/raw/` — HTML-страницу вы не получите, только содержимое файла.
 
+### Короткая форма
+
+Если на сервере задан `GHP_DEFAULT_HOST=github.com,raw.githubusercontent.com`,
+хост можно не писать вообще — остаётся `$BASE/` плюс путь:
+
+```bash
+curl -LO "$BASE/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz"
+curl -O  "$BASE/cli/cli/blob/trunk/README.md"   # -> github.com, отдаётся как raw
+curl -O  "$BASE/cli/cli/trunk/README.md"        # -> raw.githubusercontent.com
+git clone "$BASE/cli/browser"
+```
+
+Удобно для картинок в README и ссылок, которые кто-то будет копировать руками:
+
+```markdown
+![logo](https://sub.example.com/ivanghproxy/ТОКЕН/prettyleaf/media/blob/main/logo.png)
+```
+
+Учтите, что токен в такой ссылке уезжает вместе с ней всем, кто её увидит. Для
+публичных README это разумно только на прокси с `GHP_ALLOW_ANONYMOUS=1` и
+`GHP_ALLOW_LIST`, ограничивающим выдачу вашими репозиториями.
+
 ## git
 
 ```bash

@@ -605,3 +605,162 @@ func TestRootMountStillWorks(t *testing.T) {
 		t.Errorf("status = %d, want 200", rec.Code)
 	}
 }
+
+// --- short form (GHP_DEFAULT_HOST) -------------------------------------------
+
+// mirrorHosts is the ordered list a mirror deployment configures.
+var mirrorHosts = []string{"github.com", "raw.githubusercontent.com"}
+
+func TestShortFormResolvesToTheDefaultHost(t *testing.T) {
+	tests := []struct {
+		name     string
+		target   string
+		wantHost string
+		wantURI  string
+	}{
+		{
+			name:     "blob shape goes to github.com and is fetched as raw",
+			target:   "prettyleaf/media/blob/main/logo.png",
+			wantHost: "github.com",
+			wantURI:  "/prettyleaf/media/raw/main/logo.png",
+		},
+		{
+			name:     "bare ref path falls through to raw.githubusercontent.com",
+			target:   "prettyleaf/media/main/logo.png",
+			wantHost: "raw.githubusercontent.com",
+			wantURI:  "/prettyleaf/media/main/logo.png",
+		},
+		{
+			name:     "release asset",
+			target:   "cli/cli/releases/download/v1/f.zip",
+			wantHost: "github.com",
+			wantURI:  "/cli/cli/releases/download/v1/f.zip",
+		},
+		{
+			name:     "percent encoding reaches upstream intact",
+			target:   "cli/cli/releases/download/v1/my%20file%2Bx.zip",
+			wantHost: "github.com",
+			wantURI:  "/cli/cli/releases/download/v1/my%20file%2Bx.zip",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGitHub(t, okHandler("bytes"))
+			h := newHandler(t, f, func(c *config.Config) { c.DefaultHosts = mirrorHosts })
+
+			rec := do(h, http.MethodGet, base+tc.target, nil, nil)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			got := f.last(t)
+			if got.Host != tc.wantHost {
+				t.Errorf("upstream Host = %q, want %q", got.Host, tc.wantHost)
+			}
+			if got.URI != tc.wantURI {
+				t.Errorf("upstream URI = %q, want %q", got.URI, tc.wantURI)
+			}
+		})
+	}
+}
+
+func TestShortFormIsOffUnlessConfigured(t *testing.T) {
+	f := newFakeGitHub(t, okHandler("bytes"))
+	h := newHandler(t, f, nil)
+
+	rec := do(h, http.MethodGet, base+"prettyleaf/media/blob/main/logo.png", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 while GHP_DEFAULT_HOST is unset", rec.Code)
+	}
+	if f.count() != 0 {
+		t.Error("upstream was contacted for a target the proxy should not have resolved")
+	}
+}
+
+func TestShortFormStillRequiresTheToken(t *testing.T) {
+	f := newFakeGitHub(t, okHandler("bytes"))
+	h := newHandler(t, f, func(c *config.Config) { c.DefaultHosts = mirrorHosts })
+
+	rec := do(h, http.MethodGet, prefix+"prettyleaf/media/blob/main/logo.png", nil, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+	if f.count() != 0 {
+		t.Error("an unauthenticated short-form request reached GitHub")
+	}
+}
+
+func TestShortFormObeysAccessLists(t *testing.T) {
+	f := newFakeGitHub(t, okHandler("x"))
+	h := newHandler(t, f, func(c *config.Config) {
+		c.DefaultHosts = mirrorHosts
+		c.DenyList = mustRules(t, "prettyleaf/secret")
+	})
+
+	if got := do(h, http.MethodGet, base+"prettyleaf/media/blob/main/logo.png", nil, nil).Code; got != http.StatusOK {
+		t.Errorf("allowed repo status = %d, want 200", got)
+	}
+	if got := do(h, http.MethodGet, base+"prettyleaf/secret/blob/main/logo.png", nil, nil).Code; got != http.StatusNotFound {
+		t.Errorf("denied repo status = %d, want 404", got)
+	}
+}
+
+func TestShortFormDoesNotReinterpretForeignHosts(t *testing.T) {
+	f := newFakeGitHub(t, okHandler("x"))
+	h := newHandler(t, f, func(c *config.Config) { c.DefaultHosts = mirrorHosts })
+
+	// Each of these names a host. None may be re-read as an owner segment and
+	// silently served from the default host.
+	for _, target := range []string{
+		"https://gitlab.com/a/b/blob/main/f",
+		"gitlab.com/a/b/blob/main/f",
+		"http://127.0.0.1:8900/healthz",
+		"https://github.com/cli/cli/main/README.md", // raw-only shape on github.com
+	} {
+		if got := do(h, http.MethodGet, base+target, nil, nil).Code; got != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404", target, got)
+		}
+	}
+	if f.count() != 0 {
+		t.Errorf("upstream saw %d requests, want 0", f.count())
+	}
+}
+
+func TestShortFormGitSmartHTTP(t *testing.T) {
+	f := newFakeGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+		_, _ = io.WriteString(w, "001e# service=git-upload-pack\n")
+	})
+	h := newHandler(t, f, func(c *config.Config) { c.DefaultHosts = mirrorHosts })
+
+	rec := do(h, http.MethodGet, base+"cli/browser/info/refs?service=git-upload-pack", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	got := f.last(t)
+	if got.Host != "github.com" {
+		t.Errorf("upstream Host = %q, want github.com", got.Host)
+	}
+	if got.URI != "/cli/browser/info/refs?service=git-upload-pack" {
+		t.Errorf("upstream URI = %q", got.URI)
+	}
+}
+
+func TestShortFormRedirectStaysInsideTheProxy(t *testing.T) {
+	f := newFakeGitHub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "github.com" {
+			http.Redirect(w, r, "https://objects.githubusercontent.com/blob/f.zip", http.StatusFound)
+			return
+		}
+		_, _ = io.WriteString(w, "asset-bytes")
+	})
+	h := newHandler(t, f, func(c *config.Config) { c.DefaultHosts = mirrorHosts })
+
+	rec := do(h, http.MethodGet, base+"cli/cli/releases/download/v1/f.zip", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != "asset-bytes" {
+		t.Errorf("body = %q, want the asset from the CDN host", got)
+	}
+}

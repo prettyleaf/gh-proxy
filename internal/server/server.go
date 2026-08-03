@@ -69,7 +69,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Everything from here on is the embedded URL, query string included.
-	target, err := ghurl.Parse(rest)
+	target, err := ghurl.ParseWithDefaults(rest, s.cfg.DefaultHosts)
 	if err != nil {
 		s.deny(w, r, "not a proxyable GitHub URL")
 		return

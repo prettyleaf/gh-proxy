@@ -60,6 +60,49 @@ type Target struct {
 // auth token have been stripped, e.g.
 // "https://github.com/cli/cli/info/refs?service=git-upload-pack".
 func Parse(raw string) (*Target, error) {
+	return ParseWithDefaults(raw, nil)
+}
+
+// ParseWithDefaults is Parse with a fallback for targets that name no host,
+// e.g. "cli/cli/blob/trunk/README.md". Each host in defaults is tried in turn
+// and the first one whose path shape matches wins, which is what makes the
+// proxy usable as a mirror: the client's URL is the GitHub URL with the host
+// chopped off.
+//
+// defaults must contain only hosts SupportedHost accepts; an empty list keeps
+// the strict behaviour of Parse, where the host is mandatory.
+func ParseWithDefaults(raw string, defaults []string) (*Target, error) {
+	u, err := prepare(raw)
+	if err != nil {
+		return nil, err
+	}
+	if t, err := match(u); err == nil {
+		return t, nil
+	}
+	// A target that named a host is taken at face value. Retrying a recognized
+	// one against the defaults would quietly move a request the client aimed at
+	// github.com over to raw.githubusercontent.com, which is a different
+	// resource; retrying an unrecognized one would turn "gitlab.com" into an
+	// owner name and answer with somebody else's file.
+	if namesAHost(u) {
+		return nil, ErrNoMatch
+	}
+	for _, h := range defaults {
+		u2, err := prepare(h + "/" + hostless(u))
+		if err != nil {
+			continue
+		}
+		if t, err := match(u2); err == nil {
+			return t, nil
+		}
+	}
+	return nil, ErrNoMatch
+}
+
+// prepare turns a request remainder into a normalized absolute URL. It does no
+// matching, so the result is not yet known to be a GitHub URL this proxy will
+// forward.
+func prepare(raw string) (*url.URL, error) {
 	u, err := url.Parse(RepairScheme(raw))
 	if err != nil {
 		return nil, ErrNoMatch
@@ -72,28 +115,20 @@ func Parse(raw string) (*Target, error) {
 	u.User = nil
 	// Always talk to GitHub over TLS regardless of what the client asked for.
 	u.Scheme = "https"
+	return u, nil
+}
 
-	host := strings.ToLower(u.Hostname())
-	path := u.Path
-
-	var candidates []candidate
-	switch host {
-	case "github.com", "www.github.com":
-		u.Host = "github.com"
-		candidates = githubCandidates
-	case "raw.githubusercontent.com", "raw.github.com":
-		u.Host = host
-		candidates = rawCandidates
-	case "gist.github.com", "gist.githubusercontent.com":
-		u.Host = host
-		candidates = gistCandidates
-	default:
+// match validates the host and path shape, canonicalizing u in place.
+func match(u *url.URL) (*Target, error) {
+	host, candidates, ok := hostCandidates(strings.ToLower(u.Hostname()))
+	if !ok {
 		return nil, ErrNoMatch
 	}
+	u.Host = host
 
 	var t *Target
 	for _, c := range candidates {
-		if m := c.match(path); m != nil {
+		if m := c.match(u.Path); m != nil {
 			t = newTarget(c.kind, m, u)
 			break
 		}
@@ -108,6 +143,59 @@ func Parse(raw string) (*Target, error) {
 		rewriteBlobToRaw(t.URL)
 	}
 	return t, nil
+}
+
+// hostCandidates is the entire host allow list: the set of hosts this proxy
+// will talk to, and the path shapes each one accepts. Nothing else reaches the
+// network, which is what keeps the service from being a general-purpose relay.
+func hostCandidates(host string) (canonical string, candidates []candidate, ok bool) {
+	switch host {
+	case "github.com", "www.github.com":
+		return "github.com", githubCandidates, true
+	case "raw.githubusercontent.com", "raw.github.com":
+		return host, rawCandidates, true
+	case "gist.github.com", "gist.githubusercontent.com":
+		return host, gistCandidates, true
+	default:
+		return "", nil, false
+	}
+}
+
+// SupportedHost reports whether host may be proxied, and so whether it is a
+// usable default host. Configuration validates against it at startup.
+func SupportedHost(host string) bool {
+	_, _, ok := hostCandidates(strings.ToLower(strings.TrimSpace(host)))
+	return ok
+}
+
+// namesAHost reports whether the client actually spelled out a host, as opposed
+// to handing over a bare repository path whose first segment url.Parse had to
+// take for the authority.
+//
+// A dot or a colon is the tell: GitHub owner names are alphanumerics and
+// hyphens, so "prettyleaf" is a path segment while "gitlab.com", "127.0.0.1",
+// "[::1]" and "example:8080" are all attempts to name a host. Only the former
+// may have a default host spliced in front of it.
+func namesAHost(u *url.URL) bool {
+	if _, _, known := hostCandidates(strings.ToLower(u.Hostname())); known {
+		return true
+	}
+	return strings.ContainsAny(u.Host, ".:")
+}
+
+// hostless re-renders a URL as the path it would have been without a host, so
+// that a default host can be pasted in front of it. u.Host holds whatever
+// url.Parse took for the authority, which for a hostless target is really the
+// first path segment ("cli" in "cli/cli/blob/trunk/README.md").
+//
+// The result is a string spliced before url.Parse, exactly like the original
+// request target, so percent-encoding and the query survive untouched.
+func hostless(u *url.URL) string {
+	s := u.Host + u.EscapedPath()
+	if u.RawQuery != "" {
+		s += "?" + u.RawQuery
+	}
+	return strings.TrimPrefix(s, "/")
 }
 
 type candidate struct {
