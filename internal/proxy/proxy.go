@@ -24,6 +24,11 @@ type Options struct {
 	SizeLimit int64
 	// UpstreamToken is a GitHub PAT presented to GitHub, if any.
 	UpstreamToken string
+	// UpstreamTokenFunc, when set, supplies that credential per request and
+	// takes precedence over UpstreamToken. It exists so a credential that
+	// rotates underneath the process — the gh CLI source — is picked up without
+	// a restart. It runs on the request path and must not block.
+	UpstreamTokenFunc func() string
 	// CORS enables permissive cross-origin response headers.
 	CORS bool
 	// LogTargets includes upstream URLs in logs. Off by default, because with
@@ -157,9 +162,16 @@ func (p *Proxy) rewrite(r *httputil.ProxyRequest) {
 	// The client's Referer would carry the tokenized URL straight to GitHub.
 	r.Out.Header.Del("Referer")
 
-	if p.opts.UpstreamToken != "" {
-		r.Out.Header.Set("Authorization", "Bearer "+p.opts.UpstreamToken)
+	if token := p.upstreamToken(); token != "" {
+		r.Out.Header.Set("Authorization", "Bearer "+token)
 	}
+}
+
+func (p *Proxy) upstreamToken() string {
+	if p.opts.UpstreamTokenFunc != nil {
+		return p.opts.UpstreamTokenFunc()
+	}
+	return p.opts.UpstreamToken
 }
 
 func (p *Proxy) modifyResponse(resp *http.Response) error {

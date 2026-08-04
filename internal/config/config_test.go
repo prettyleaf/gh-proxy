@@ -124,6 +124,69 @@ func TestLoadAllowsExplicitAnonymous(t *testing.T) {
 	}
 }
 
+func TestLoadUpstreamSourceDefaultsToTheEnvironment(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.UpstreamSource != UpstreamSourceEnv {
+		t.Errorf("UpstreamSource = %q, want %q", cfg.UpstreamSource, UpstreamSourceEnv)
+	}
+}
+
+func TestLoadUpstreamSourceGH(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	t.Setenv("GHP_UPSTREAM_TOKEN_SOURCE", "GH")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.UpstreamSource != UpstreamSourceGH {
+		t.Errorf("UpstreamSource = %q, want %q (the value should be case-insensitive)", cfg.UpstreamSource, UpstreamSourceGH)
+	}
+	if cfg.GHBin != "gh" || cfg.GHHost != "github.com" {
+		t.Errorf("gh defaults = %q/%q, want gh/github.com", cfg.GHBin, cfg.GHHost)
+	}
+	if cfg.GHRefresh <= 0 {
+		t.Error("the credential must be re-read by default: gh rotates it while the process runs")
+	}
+}
+
+func TestLoadRejectsAnUnknownUpstreamSource(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	t.Setenv("GHP_UPSTREAM_TOKEN_SOURCE", "keychain")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted an unknown upstream token source")
+	}
+}
+
+func TestLoadRejectsGHSourceTogetherWithAPAT(t *testing.T) {
+	// Two credentials configured at once: whichever loses would do so silently.
+	for _, key := range []string{"GHP_UPSTREAM_TOKEN", "GHP_UPSTREAM_TOKEN_FILE"} {
+		t.Run(key, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("GHP_TOKEN", goodToken)
+			t.Setenv("GHP_UPSTREAM_TOKEN_SOURCE", "gh")
+			if key == "GHP_UPSTREAM_TOKEN_FILE" {
+				path := filepath.Join(t.TempDir(), "pat")
+				if err := os.WriteFile(path, []byte("ghp_example\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv(key, path)
+			} else {
+				t.Setenv(key, "ghp_example")
+			}
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted %s alongside the gh source", key)
+			}
+		})
+	}
+}
+
 func TestLoadReadsTokenFromFile(t *testing.T) {
 	clearEnv(t)
 	path := filepath.Join(t.TempDir(), "token")
@@ -253,7 +316,8 @@ func clearEnv(t *testing.T) {
 		"GHP_ALLOW_ANONYMOUS", "GHP_ALLOW_LIST", "GHP_DENY_LIST", "GHP_UPSTREAM_TOKEN",
 		"GHP_UPSTREAM_TOKEN_FILE", "GHP_REDIRECT_HOSTS", "GHP_MAX_REDIRECTS",
 		"GHP_SIZE_LIMIT", "GHP_CORS", "GHP_LOG_TARGETS", "GHP_LOG_LEVEL",
-		"GHP_DEFAULT_HOST",
+		"GHP_DEFAULT_HOST", "GHP_UPSTREAM_TOKEN_SOURCE", "GHP_GH_BIN", "GHP_GH_HOST",
+		"GHP_GH_CONFIG_DIR", "GHP_GH_REFRESH",
 	} {
 		t.Setenv(k, "")
 	}

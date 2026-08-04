@@ -151,6 +151,52 @@ BASE='https://sub.example.com/ivanghproxy'
 curl -LO "$BASE/https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz"
 ```
 
+## Private repos without a PAT
+
+Private repositories need a credential the proxy presents to GitHub. Instead of
+minting a PAT and pasting it into `.env`, point the proxy at a `gh` CLI that is
+already logged in:
+
+```bash
+gh auth login                  # once, as the user that runs the proxy
+GHP_UPSTREAM_TOKEN_SOURCE=gh   # in .env
+```
+
+Startup refuses if `gh` is missing or logged out, so a broken setup is a boot
+error rather than an unexplained `404` on the first private download. The
+credential is re-read every `GHP_GH_REFRESH` (default `5m`), because gh rotates
+OAuth tokens on its own schedule. `GHP_UPSTREAM_TOKEN` and this source together
+are a startup error — pick one.
+
+Two lookups, in order:
+
+1. `gh auth token --hostname github.com`, whenever the binary is reachable.
+2. `$GHP_GH_CONFIG_DIR/hosts.yml`, when it is not.
+
+The second one is what makes this work in Docker: the image is built on
+`scratch` and has no `gh` to run, so mount gh's config directory read-only. The
+container must run as a uid that can read `hosts.yml` (gh writes it `0600`):
+
+```yaml
+services:
+  gh-proxy:
+    user: "1000:1000"                    # the uid that owns ~/.config/gh
+    volumes:
+      - ${HOME}/.config/gh:/gh:ro
+    environment:
+      GHP_UPSTREAM_TOKEN_SOURCE: gh
+      GHP_GH_CONFIG_DIR: /gh
+```
+
+If gh stores the token in a system keyring rather than in `hosts.yml`, only the
+gh binary can read it back — either run the proxy outside the container, or keep
+using `GHP_UPSTREAM_TOKEN`.
+
+Worth being explicit about the trade: this hands the proxy your whole GitHub
+account, so anyone holding `GHP_TOKEN` reaches everything you can. A PAT scoped
+to `contents: read` on just the repositories you serve is tighter. Either way,
+bound it with `GHP_ALLOW_LIST`.
+
 ## Settings
 
 All of them are environment variables; the full annotated list is in
@@ -167,6 +213,10 @@ All of them are environment variables; the full annotated list is in
 | `GHP_DENY_LIST` | empty | same syntax, applied after the allow list |
 | `GHP_DEFAULT_HOST` | empty | hosts tried when the URL names none, in order: `github.com,raw.githubusercontent.com`. See [short form](#short-form) |
 | `GHP_UPSTREAM_TOKEN` | — | GitHub PAT for private repos and rate limits |
+| `GHP_UPSTREAM_TOKEN_SOURCE` | `env` | `gh` takes that credential from an authenticated `gh` CLI instead. See [private repos without a PAT](#private-repos-without-a-pat) |
+| `GHP_GH_BIN` / `GHP_GH_HOST` | `gh` / `github.com` | binary and GitHub host for the `gh` source |
+| `GHP_GH_CONFIG_DIR` | gh's own default | where `hosts.yml` is looked up when the binary is unavailable |
+| `GHP_GH_REFRESH` | `5m` | how often the `gh` credential is re-read; `0` never |
 | `GHP_SIZE_LIMIT` | `0` | over the limit → `302` to the real GitHub. `512MB`, `2GB` |
 | `GHP_REDIRECT_HOSTS` | GitHub CDNs | where redirects may be followed (**replaces** the default) |
 | `GHP_MAX_REDIRECTS` | `5` | |

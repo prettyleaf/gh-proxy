@@ -32,7 +32,15 @@ type Config struct {
 	// Empty means the host is mandatory, which is the default.
 	DefaultHosts []string
 
-	UpstreamToken string // GitHub PAT used towards GitHub, if any
+	UpstreamToken  string // GitHub PAT used towards GitHub, if any
+	UpstreamSource string // where that credential comes from: "env" or "gh"
+
+	// gh CLI source settings; only consulted when UpstreamSource is "gh".
+	GHBin       string
+	GHHost      string
+	GHConfigDir string        // empty means gh's own default location
+	GHRefresh   time.Duration // 0 disables re-reading
+
 	RedirectHosts map[string]bool
 	MaxRedirects  int
 	SizeLimit     int64 // 0 disables the limit
@@ -47,6 +55,15 @@ type Config struct {
 	ResponseHeaderTimeout time.Duration
 	ShutdownTimeout       time.Duration
 }
+
+// Where the upstream GitHub credential is read from.
+const (
+	// UpstreamSourceEnv takes it from GHP_UPSTREAM_TOKEN(_FILE).
+	UpstreamSourceEnv = "env"
+	// UpstreamSourceGH takes it from an authenticated gh CLI, so a private-repo
+	// deployment needs no PAT of its own.
+	UpstreamSourceGH = "gh"
+)
 
 // DefaultRedirectHosts are the hosts a GitHub download may legitimately bounce
 // to. Following these server-side is the whole point of the proxy: a client that
@@ -106,6 +123,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("GHP_TOKEN must not contain '/', '?', '#' or spaces: it is carried as a single URL path segment")
 	}
 
+	if err = c.loadUpstreamSource(); err != nil {
+		return nil, err
+	}
+
 	if c.AllowList, err = rules("GHP_ALLOW_LIST"); err != nil {
 		return nil, err
 	}
@@ -136,6 +157,36 @@ func Load() (*Config, error) {
 	}
 
 	return c, nil
+}
+
+// loadUpstreamSource decides where the credential presented to GitHub comes
+// from. Two sources configured at once is a startup error rather than a
+// precedence rule: silently ignoring one of them is how an operator ends up
+// convinced the proxy is using a PAT it never read.
+func (c *Config) loadUpstreamSource() error {
+	c.UpstreamSource = strings.ToLower(env("GHP_UPSTREAM_TOKEN_SOURCE", UpstreamSourceEnv))
+	switch c.UpstreamSource {
+	case UpstreamSourceEnv:
+		return nil
+	case UpstreamSourceGH:
+		if c.UpstreamToken != "" {
+			return fmt.Errorf("GHP_UPSTREAM_TOKEN_SOURCE=gh conflicts with a configured GHP_UPSTREAM_TOKEN (or GHP_UPSTREAM_TOKEN_FILE); keep one of the two")
+		}
+	default:
+		return fmt.Errorf("GHP_UPSTREAM_TOKEN_SOURCE must be %q or %q, got %q",
+			UpstreamSourceEnv, UpstreamSourceGH, c.UpstreamSource)
+	}
+
+	c.GHBin = env("GHP_GH_BIN", "gh")
+	c.GHHost = strings.ToLower(env("GHP_GH_HOST", "github.com"))
+	c.GHConfigDir = strings.TrimSpace(os.Getenv("GHP_GH_CONFIG_DIR"))
+	// Re-read on an interval because gh rotates OAuth tokens by itself; a value
+	// read once at startup goes stale while the process keeps running.
+	c.GHRefresh = envDuration("GHP_GH_REFRESH", 5*time.Minute)
+	if c.GHRefresh < 0 {
+		return fmt.Errorf("GHP_GH_REFRESH must not be negative")
+	}
+	return nil
 }
 
 // normalizePrefix forces the mount path into the "/x/y/" shape the request
