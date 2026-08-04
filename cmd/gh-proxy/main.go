@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/prettyleaf/gh-proxy/internal/config"
+	"github.com/prettyleaf/gh-proxy/internal/ghcli"
 	"github.com/prettyleaf/gh-proxy/internal/proxy"
 	"github.com/prettyleaf/gh-proxy/internal/server"
 )
@@ -63,11 +64,25 @@ func run() error {
 	log := newLogger(cfg.LogLevel)
 	slog.SetDefault(log)
 
+	// Set up before the credential is read, so that whatever the gh source
+	// starts in the background is bound to the same shutdown signal.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Resolved before anything listens: a gh CLI that is missing or logged out
+	// is a configuration error, and refusing to start says so far more clearly
+	// than 404ing every private-repo request afterwards.
+	upstreamToken, err := upstreamCredential(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+
 	p := proxy.New(proxy.Options{
 		RedirectHosts:         cfg.RedirectHosts,
 		MaxRedirects:          cfg.MaxRedirects,
 		SizeLimit:             cfg.SizeLimit,
 		UpstreamToken:         cfg.UpstreamToken,
+		UpstreamTokenFunc:     upstreamToken,
 		CORS:                  cfg.CORS,
 		LogTargets:            cfg.LogTargets,
 		DialTimeout:           cfg.DialTimeout,
@@ -99,16 +114,17 @@ func run() error {
 		"admin_listen", cfg.AdminListen,
 		"prefix", cfg.Prefix,
 		"auth", authMode(cfg),
+		"upstream", upstreamMode(cfg, upstreamToken != nil),
 		"allow_list", cfg.AllowList.String(),
 		"deny_list", cfg.DenyList.String(),
 		"size_limit", cfg.SizeLimit,
 	)
 	if cfg.AllowAnonymous {
 		log.Warn("running without authentication: anyone who can reach this listener can use it as a GitHub relay")
+		if cfg.UpstreamToken != "" || upstreamToken != nil {
+			log.Warn("an anonymous instance lends its GitHub credential to every caller: unset the upstream token or restrict who can reach the listener")
+		}
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	errCh := make(chan error, 2)
 	go serve(public, "public", errCh)
@@ -145,11 +161,44 @@ func adminHandler() http.Handler {
 	return mux
 }
 
+// upstreamCredential resolves the credential presented to GitHub. It returns
+// nil when the token is a fixed string from the environment, leaving the proxy
+// on its static field; a non-nil func means the value can change while the
+// process runs.
+func upstreamCredential(ctx context.Context, cfg *config.Config, log *slog.Logger) (func() string, error) {
+	if cfg.UpstreamSource != config.UpstreamSourceGH {
+		return nil, nil
+	}
+	src := ghcli.New(ghcli.Options{
+		Bin:       cfg.GHBin,
+		Host:      cfg.GHHost,
+		ConfigDir: cfg.GHConfigDir,
+		Refresh:   cfg.GHRefresh,
+		Logger:    log,
+	})
+	if err := src.Load(ctx); err != nil {
+		return nil, fmt.Errorf("GHP_UPSTREAM_TOKEN_SOURCE=gh: %w; run `gh auth login`, or set GHP_UPSTREAM_TOKEN instead", err)
+	}
+	go src.Refresh(ctx)
+	return src.Token, nil
+}
+
 func authMode(cfg *config.Config) string {
 	if cfg.AllowAnonymous {
 		return "anonymous"
 	}
 	return "token"
+}
+
+func upstreamMode(cfg *config.Config, fromGH bool) string {
+	switch {
+	case fromGH:
+		return "gh-cli"
+	case cfg.UpstreamToken != "":
+		return "token"
+	default:
+		return "none"
+	}
 }
 
 func newLogger(level string) *slog.Logger {
