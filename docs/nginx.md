@@ -164,6 +164,105 @@ docker compose logs -f gh-proxy
 `GHP_LOG_TARGETS=1` (покажет upstream-URL в ошибках). **Оба возвращайте обратно
 после отладки** — вместе они пишут в лог полные URL.
 
+## Страница статуса
+
+`GHP_STATUS_PATH` вешает страницу со счётчиками на отдельный путь **от корня
+сайта**, а не внутри `GHP_PREFIX`. Смысл ровно в этом: получается один
+`location`, перед которым можно поставить свою аутентификацию, не трогая всё
+остальное.
+
+```bash
+# .env
+GHP_STATUS_PATH=/ghp-status
+GHP_STATUS_AUTH=none    # проверять будет nginx, см. ниже
+```
+
+```nginx
+location /ghp-status {
+    auth_request     /tinyauth;
+    error_page 401 = @tinyauth_login;
+
+    proxy_pass http://127.0.0.1:8899;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host              $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    access_log off;
+}
+
+location = /tinyauth {
+    internal;
+    proxy_pass http://127.0.0.1:3000/api/auth/nginx;
+
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length   "";
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host  $http_host;
+    proxy_set_header X-Forwarded-Uri   $request_uri;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Real-IP         $remote_addr;
+}
+
+location @tinyauth_login {
+    return 302 https://tinyauth.example.com/login?redirect_uri=$scheme://$http_host$request_uri;
+}
+```
+
+Три заголовка `X-Forwarded-Proto`, `X-Forwarded-Host` и `X-Forwarded-Uri`
+tinyauth требует обязательно — без любого из них подзапрос падает, а `location`
+отдаёт 500 вместо формы логина. Ей самой стоит задать
+`TINYAUTH_AUTH_TRUSTEDPROXIES` с адресом nginx, иначе она не поверит
+`X-Real-IP`/`X-Forwarded-For`. Точные имена эндпоинта и переменных зависят от
+версии — сверяйтесь с [документацией tinyauth](https://tinyauth.app/docs).
+
+Без слеша в `proxy_pass` путь доезжает до приложения как есть, поэтому
+`GHP_STATUS_PATH` должен совпадать с `location` в точности. Под этим же путём
+живут `/ghp-status/json` (страница опрашивает его раз в 5 с) и
+`/ghp-status/metrics` — оба закрываются тем же `auth_request`, потому что
+`location` без `=` покрывает и вложенные пути.
+
+То же самое через basic-аутентификацию, если tinyauth не нужен:
+
+```nginx
+location /ghp-status {
+    auth_basic           "gh-proxy";
+    auth_basic_user_file /etc/nginx/ghp-status.htpasswd;
+
+    proxy_pass http://127.0.0.1:8899;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    access_log off;
+}
+```
+
+Внимание: с `GHP_STATUS_AUTH=none` приложение не проверяет вообще ничего — если
+`location` окажется без `auth_request`/`auth_basic`, страница станет публичной.
+Проверять так:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}
+' https://sub.example.com/ghp-status       # 302 или 401, не 200
+curl -s -o /dev/null -w '%{http_code}
+' https://sub.example.com/ghp-status/json  # то же самое
+```
+
+Оставить проверку приложению — `GHP_STATUS_AUTH=token` (по умолчанию): тогда
+страница требует тот же токен, что и прокси, и `location` можно проксировать
+без `auth_request`. В браузере открывается как
+`https://sub.example.com/ghp-status?token=ВАШ_ТОКЕН` — токен при этом попадёт в
+`access_log` nginx, если он не выключен для этого блока.
+
+Метрики без публичного пути вообще: админский listener отдаёт `/status`,
+`/status/json` и `/metrics` всегда, но слушает только loopback.
+
+```bash
+curl -s 127.0.0.1:8900/metrics
+```
+
 ## Другие фронтенды
 
 ### Caddy

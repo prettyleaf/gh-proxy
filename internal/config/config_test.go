@@ -309,6 +309,80 @@ func TestLoadLeavesDefaultHostsUnsetByDefault(t *testing.T) {
 }
 
 // clearEnv removes every GHP_ variable so a test starts from a known state.
+func TestNormalizeStatusPath(t *testing.T) {
+	tests := []struct {
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"", "", false},
+		{"status", "/status", false},
+		{"/status", "/status", false},
+		{"/status/", "/status", false},
+		{"/ivanghproxy/status", "/ivanghproxy/status", false},
+		{"/", "", true},
+		{"///", "", true},
+		{"/a//b", "", true},
+		{"/a?b", "", true},
+		{"/a b", "", true},
+	}
+	for _, tc := range tests {
+		got, err := normalizeStatusPath(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("normalizeStatusPath(%q) = %q, want an error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("normalizeStatusPath(%q): %v", tc.in, err)
+		} else if got != tc.want {
+			t.Errorf("normalizeStatusPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestLoadStatusPageIsOffByDefault(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.StatusPath != "" {
+		t.Errorf("StatusPath = %q, want it disabled unless asked for", cfg.StatusPath)
+	}
+	if cfg.StatusAuth != StatusAuthToken {
+		t.Errorf("StatusAuth = %q, want %q", cfg.StatusAuth, StatusAuthToken)
+	}
+}
+
+func TestLoadStatusAuthNone(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	t.Setenv("GHP_STATUS_PATH", "/ghp-status/")
+	t.Setenv("GHP_STATUS_AUTH", "NONE")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.StatusPath != "/ghp-status" {
+		t.Errorf("StatusPath = %q, want %q", cfg.StatusPath, "/ghp-status")
+	}
+	if cfg.StatusAuth != StatusAuthNone {
+		t.Errorf("StatusAuth = %q, want %q", cfg.StatusAuth, StatusAuthNone)
+	}
+}
+
+func TestLoadRejectsAnUnknownStatusAuth(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GHP_TOKEN", goodToken)
+	t.Setenv("GHP_STATUS_AUTH", "tinyauth")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load accepted an unknown GHP_STATUS_AUTH")
+	}
+}
+
 func clearEnv(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
@@ -317,7 +391,7 @@ func clearEnv(t *testing.T) {
 		"GHP_UPSTREAM_TOKEN_FILE", "GHP_REDIRECT_HOSTS", "GHP_MAX_REDIRECTS",
 		"GHP_SIZE_LIMIT", "GHP_CORS", "GHP_LOG_TARGETS", "GHP_LOG_LEVEL",
 		"GHP_DEFAULT_HOST", "GHP_UPSTREAM_TOKEN_SOURCE", "GHP_GH_BIN", "GHP_GH_HOST",
-		"GHP_GH_CONFIG_DIR", "GHP_GH_REFRESH",
+		"GHP_GH_CONFIG_DIR", "GHP_GH_REFRESH", "GHP_STATUS_PATH", "GHP_STATUS_AUTH",
 	} {
 		t.Setenv(k, "")
 	}

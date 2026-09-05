@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>gh-proxy status</title>
+<style>
+:root{
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+  --series:#2a78d6; --track:rgba(42,120,214,.14);
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#d03b3b;
+}
+@media (prefers-color-scheme:dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --ink:#fff; --ink2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --series:#3987e5; --track:rgba(57,135,229,.18);
+  }
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:24px 20px 48px; background:var(--plane); color:var(--ink);
+  font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+.wrap{max-width:1040px;margin:0 auto}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+h1{font-size:19px;font-weight:600;margin:0;letter-spacing:-.01em}
+h1 .ver{color:var(--muted);font-weight:400;font-size:13px;margin-left:6px}
+header .spacer{flex:1}
+header .live{display:flex;align-items:center;gap:6px;color:var(--ink2);font-size:12px}
+header .live::before{
+  content:"";width:8px;height:8px;border-radius:50%;background:var(--good);
+}
+header .live.stale::before{background:var(--crit)}
+h2{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2);margin:0 0 12px}
+h2 .sub{text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted);margin-left:8px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:16px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+  background:var(--border);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:16px}
+.tile{background:var(--surface);padding:14px 16px}
+.tile .label{color:var(--ink2);font-size:12px}
+.tile .value{font-size:26px;font-weight:600;line-height:1.25;margin-top:2px}
+.tile .note{color:var(--muted);font-size:11px}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.cols .card{margin-bottom:16px}
+.rows{display:flex;flex-direction:column;gap:9px}
+.row{display:grid;grid-template-columns:1fr auto;gap:2px 10px;align-items:baseline}
+.row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink2)}
+.row .name .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:baseline}
+.row .n{font-variant-numeric:tabular-nums;color:var(--ink)}
+.row .meter{grid-column:1/-1;height:4px;border-radius:2px;background:var(--track);overflow:hidden}
+.row .meter span{display:block;height:100%;border-radius:2px;background:var(--series)}
+.chartbox{overflow-x:auto}
+.chartwrap{position:relative;min-width:620px}
+svg{display:block;width:100%}
+.tip{position:absolute;pointer-events:none;opacity:0;transition:opacity .08s;
+  background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  box-shadow:0 2px 10px rgba(0,0,0,.12);padding:6px 9px;font-size:12px;white-space:nowrap;
+  color:var(--ink);z-index:2}
+.tip b{font-weight:600}
+.tip .t{color:var(--muted);display:block;font-size:11px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--muted);font-size:11px;letter-spacing:.03em;
+  text-transform:uppercase;padding:0 10px 7px 0;border-bottom:1px solid var(--border)}
+td{padding:6px 10px 6px 0;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+tr:last-child td{border-bottom:0}
+td.repo{font-variant-numeric:normal;color:var(--ink2)}
+td.num{text-align:right}
+.badge{display:inline-block;min-width:30px;font-variant-numeric:tabular-nums}
+.badge.s2{color:var(--good)} .badge.s3{color:var(--series)}
+.badge.s4{color:var(--serious)} .badge.s5{color:var(--crit)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:7px 20px;margin:0;font-size:13px}
+dt{color:var(--muted)}
+dd{margin:0;overflow-wrap:anywhere}
+code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--track);
+  padding:1px 5px;border-radius:4px}
+.empty{color:var(--muted);font-size:13px}
+footer{color:var(--muted);font-size:12px;margin-top:8px;display:flex;gap:16px;flex-wrap:wrap}
+footer a{color:var(--ink2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>gh-proxy<span class="ver" id="version"></span></h1>
+    <div class="spacer"></div>
+    <div class="live" id="live">connecting</div>
+  </header>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Requests per minute <span class="sub" id="chart-sub">last 60 minutes</span></h2>
+    <div class="chartbox"><div class="chartwrap" id="chartwrap">
+      <svg id="chart" width="960" height="170" role="img" aria-label="Requests per minute over the last hour"></svg>
+      <div class="tip" id="tip"></div>
+    </div></div>
+  </section>
+
+  <div class="cols">
+    <section class="card"><h2>Responses</h2><div class="rows" id="status"></div></section>
+    <section class="card"><h2>Denials <span class="sub">by reason</span></h2><div class="rows" id="reasons"></div></section>
+    <section class="card"><h2>Targets <span class="sub">by URL kind</span></h2><div class="rows" id="kinds"></div></section>
+    <section class="card"><h2>Top repositories</h2><div class="rows" id="repos"></div></section>
+  </div>
+
+  <section class="card">
+    <h2>Recent requests <span class="sub">newest first</span></h2>
+    <div id="recent"></div>
+  </section>
+
+  <section class="card">
+    <h2>Configuration</h2>
+    <dl id="config"></dl>
+  </section>
+
+  <footer>
+    <a id="link-json" href="json">JSON</a>
+    <a id="link-prom" href="metrics">Prometheus</a>
+    <span id="started"></span>
+  </footer>
+</div>
+
+<script>
+"use strict";
+// The page is served from the configured status path, which the operator picks;
+// every request it makes is relative to that path, query string included, so a
+// token passed as ?token=... keeps working on the polling requests too.
+const BASE = location.pathname.replace(/\/+$/, "");
+const Q = location.search;
+document.getElementById("link-json").href = BASE + "/json" + Q;
+document.getElementById("link-prom").href = BASE + "/metrics" + Q;
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------- formatting ---------- */
+const num = (n) => n.toLocaleString("en-US");
+function compact(n){
+  if (n < 10000) return num(n);
+  if (n < 1e6) return (n/1e3).toFixed(n < 1e5 ? 1 : 0) + "K";
+  if (n < 1e9) return (n/1e6).toFixed(1) + "M";
+  return (n/1e9).toFixed(1) + "B";
+}
+function bytes(n){
+  const u = ["B","KB","MB","GB","TB","PB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length-1){ n /= 1024; i++; }
+  // Three significant figures, and no trailing ".0" on a round number.
+  const dp = i === 0 || n >= 100 ? 0 : n >= 10 ? 1 : 2;
+  return n.toFixed(dp) + " " + u[i];
+}
+function ms(v){
+  if (!v) return "0 ms";
+  if (v < 1) return v.toFixed(2) + " ms";
+  if (v < 1000) return Math.round(v) + " ms";
+  return (v/1000).toFixed(v < 10000 ? 2 : 1) + " s";
+}
+function uptime(sec){
+  const d = Math.floor(sec/86400), h = Math.floor(sec%86400/3600),
+        m = Math.floor(sec%3600/60), s = Math.floor(sec%60);
+  if (d) return d + "d " + h + "h " + m + "m";
+  if (h) return h + "h " + m + "m";
+  if (m) return m + "m " + s + "s";
+  return s + "s";
+}
+const clock = (iso) => new Date(iso).toLocaleTimeString("en-GB");
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ---------- pieces ---------- */
+function tiles(d){
+  const t = [
+    ["Requests", compact(d.requests_total), num(d.requests_total) + " total"],
+    ["Proxied", compact(d.proxied), d.requests_total ? pct(d.proxied, d.requests_total) + " of requests" : "—"],
+    ["Denied", compact(d.denied), d.requests_total ? pct(d.denied, d.requests_total) + " of requests" : "—"],
+    ["In flight", num(d.in_flight), "streaming now"],
+    ["Sent", bytes(d.bytes_sent), "response bodies"],
+    ["Avg latency", ms(d.avg_millis), "peak " + ms(d.max_millis)],
+  ];
+  $("tiles").innerHTML = t.map(([l,v,n]) =>
+    `<div class="tile"><div class="label">${l}</div><div class="value">${v}</div><div class="note">${n}</div></div>`
+  ).join("");
+}
+const pct = (a,b) => b ? (a/b*100).toFixed(a/b >= 0.995 || a === 0 ? 0 : 1) + "%" : "0%";
+
+// rows renders a labelled magnitude list: the value is the number, the meter is
+// there to compare rows at a glance, never to replace the number.
+function rows(el, items, color){
+  if (!items || !items.length){ el.innerHTML = '<div class="empty">Nothing yet.</div>'; return; }
+  const max = Math.max(...items.map(i => i.count));
+  el.innerHTML = items.map(i => {
+    const c = color ? color(i.name) : "var(--series)";
+    const dot = color ? `<span class="dot" style="background:${c}"></span>` : "";
+    return `<div class="row"><div class="name">${dot}${esc(i.name)}</div>` +
+           `<div class="n">${num(i.count)}</div>` +
+           `<div class="meter"><span style="width:${(i.count/max*100).toFixed(1)}%;background:${c}"></span></div></div>`;
+  }).join("");
+}
+const statusColor = (name) => ({
+  "2xx":"var(--good)", "3xx":"var(--series)", "4xx":"var(--serious)", "5xx":"var(--crit)"
+}[name] || "var(--muted)");
+
+function recent(list){
+  if (!list.length){ $("recent").innerHTML = '<div class="empty">No requests yet.</div>'; return; }
+  const body = list.map(e => {
+    const what = e.reason ? esc(e.reason) : (e.repo ? esc(e.repo) : "—");
+    const cls = "badge s" + Math.floor(e.status/100);
+    return `<tr><td>${clock(e.at)}</td><td>${esc(e.method)}</td>` +
+      `<td class="repo">${what}</td><td>${esc(e.kind || "")}</td>` +
+      `<td><span class="${cls}">${e.status}</span></td>` +
+      `<td class="num">${e.bytes ? bytes(e.bytes) : "—"}</td>` +
+      `<td class="num">${ms(e.millis)}</td></tr>`;
+  }).join("");
+  $("recent").innerHTML =
+    "<table><thead><tr><th>Time</th><th>Method</th><th>Repository / reason</th>" +
+    "<th>Kind</th><th>Status</th><th>Size</th><th>Took</th></tr></thead><tbody>" +
+    body + "</tbody></table>";
+}
+
+function config(c, version){
+  const yn = (b) => b ? "on" : "off";
+  const items = [
+    ["Version", esc(version)],
+    ["Mount prefix", "<code>" + esc(c.prefix) + "</code>"],
+    ["Authentication", c.auth === "anonymous" ? "anonymous (open)" : "token"],
+    ["Status page", c.status_auth === "none" ? "no proxy auth (external only)" : "proxy token"],
+    ["Upstream credential", c.upstream],
+    ["Allow list", c.allow_list ? "<code>" + esc(c.allow_list) + "</code>" : "any repository"],
+    ["Deny list", c.deny_list ? "<code>" + esc(c.deny_list) + "</code>" : "none"],
+    ["Default hosts", c.default_hosts && c.default_hosts.length ? esc(c.default_hosts.join(", ")) : "host required"],
+    ["Size limit", c.size_limit ? bytes(c.size_limit) : "none"],
+    ["Max redirects", String(c.max_redirects)],
+    ["CORS", yn(c.cors)],
+  ];
+  $("config").innerHTML = items.map(([k,v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+
+/* ---------- chart ---------- */
+const NS = "http://www.w3.org/2000/svg";
+const PAD = { l: 46, r: 10, t: 10, b: 22 };
+
+function el(name, attrs, text){
+  const n = document.createElementNS(NS, name);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+// niceMax rounds the axis up to 1/2/5×10ⁿ so the tick labels are readable
+// numbers rather than whatever the busiest minute happened to be.
+function niceMax(v){
+  if (v <= 5) return Math.max(1, v);
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const s of [1, 2, 5, 10]) if (v <= s*mag) return s*mag;
+  return 10*mag;
+}
+// Columns are rounded at the data end and square at the baseline.
+function barPath(x, y, w, h, r){
+  r = Math.min(r, w/2, h);
+  return `M${x},${y+h} L${x},${y+r} Q${x},${y} ${x+r},${y} L${x+w-r},${y} Q${x+w},${y} ${x+w},${y+r} L${x+w},${y+h} Z`;
+}
+
+function chart(history){
+  const svg = $("chart");
+  const W = svg.clientWidth || 960, H = 170;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("height", H);
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const plotW = W - PAD.l - PAD.r, plotH = H - PAD.t - PAD.b;
+  const top = niceMax(Math.max(...history.map(b => b.requests), 0));
+  const slot = plotW / history.length;
+  const barW = Math.max(2, slot - 2);          // the 2px surface gap between columns
+  const y = (v) => PAD.t + plotH - (v/top)*plotH;
+
+  for (const v of [0, top/2, top]){
+    const yy = Math.round(y(v)) + .5;
+    svg.appendChild(el("line", {x1:PAD.l, x2:W-PAD.r, y1:yy, y2:yy,
+      stroke: v === 0 ? "var(--axis)" : "var(--grid)", "stroke-width":1}));
+    // A fractional midpoint gets its gridline but no label: the axis carries
+    // whole numbers of requests or nothing.
+    svg.appendChild(el("text", {x:PAD.l-8, y:yy+4, "text-anchor":"end",
+      fill:"var(--muted)", "font-size":11, "font-variant-numeric":"tabular-nums"},
+      Number.isInteger(v) ? num(v) : ""));
+  }
+
+  history.forEach((b, i) => {
+    const x = PAD.l + i*slot + (slot-barW)/2;
+    if (b.requests > 0){
+      const h = Math.max(2, plotH - (y(b.requests) - PAD.t));
+      svg.appendChild(el("path", {d: barPath(x, PAD.t+plotH-h, barW, h, 2), fill:"var(--series)"}));
+    }
+    // Full-height hit target: the columns are thin, and a one-pixel bar still
+    // needs somewhere to hover.
+    const hit = el("rect", {x: PAD.l + i*slot, y: PAD.t, width: slot, height: plotH,
+      fill:"transparent"});
+    hit.addEventListener("pointerenter", () => showTip(b, PAD.l + i*slot + slot/2));
+    hit.addEventListener("pointerleave", hideTip);
+    svg.appendChild(hit);
+  });
+
+  const t0 = history[0], tn = history[history.length-1];
+  svg.appendChild(el("text", {x:PAD.l, y:H-6, fill:"var(--muted)", "font-size":11}, hhmm(t0.minute)));
+  svg.appendChild(el("text", {x:W-PAD.r, y:H-6, "text-anchor":"end", fill:"var(--muted)",
+    "font-size":11}, "now"));
+  svg.setAttribute("aria-label",
+    `Requests per minute since ${hhmm(t0.minute)}; peak ${Math.max(...history.map(b=>b.requests))} in one minute.`);
+  return tn;
+}
+const hhmm = (minute) => new Date(minute*60000)
+  .toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit"});
+
+function showTip(b, x){
+  const tip = $("tip");
+  tip.innerHTML = `<span class="t">${hhmm(b.minute)}</span>` +
+    `<b>${num(b.requests)}</b> req · ${bytes(b.bytes)}`;
+  tip.style.opacity = 1;
+  const wrap = $("chartwrap").clientWidth, w = tip.offsetWidth;
+  tip.style.left = Math.max(0, Math.min(wrap - w, x - w/2)) + "px";
+  tip.style.top = "0px";
+}
+const hideTip = () => { $("tip").style.opacity = 0; };
+
+/* ---------- polling ---------- */
+let failures = 0;
+function live(ok){
+  const e = $("live");
+  e.classList.toggle("stale", !ok);
+  e.textContent = ok ? "live" : "unreachable";
+}
+
+async function tick(){
+  try {
+    const r = await fetch(BASE + "/json" + Q, {headers:{"Accept":"application/json"}});
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    render(d);
+    failures = 0; live(true);
+  } catch (e) {
+    if (++failures > 1) live(false);
+  }
+}
+
+let last = null;
+function render(d){
+  last = d;
+  $("version").textContent = " " + d.version;
+  $("started").textContent = "up " + uptime(d.uptime_seconds) +
+    " · since " + new Date(d.started_at).toLocaleString("en-GB");
+  document.title = "gh-proxy · " + compact(d.requests_total) + " req";
+  tiles(d);
+  chart(d.history);
+  rows($("status"), d.status, statusColor);
+  rows($("reasons"), d.deny_reasons);
+  rows($("kinds"), d.kinds);
+  rows($("repos"), d.top_repos);
+  recent(d.recent);
+  config(d.config, d.version);
+}
+
+// The chart is drawn at the pixel width it is given, so a resize redraws it
+// rather than scaling the type down with it.
+window.addEventListener("resize", () => { if (last) chart(last.history); });
+
+tick();
+setInterval(() => { if (!document.hidden) tick(); }, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+</script>
+</body>
+</html>

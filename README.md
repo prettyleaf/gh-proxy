@@ -19,7 +19,8 @@ https://sub.example.com/ivanghproxy/TOKEN/https://github.com/cli/cli/releases/do
 * server-side redirect following to GitHub's CDN backends;
 * private repositories through your own PAT (`GHP_UPSTREAM_TOKEN`);
 * restriction by owner/repository (allow and deny lists);
-* an optional [short URL form](#short-form) that drops the `https://github.com` part.
+* an optional [short URL form](#short-form) that drops the `https://github.com` part;
+* an optional [status page](#status-page) with counters, a per-minute chart and Prometheus metrics.
 
 ## Quick start
 
@@ -133,6 +134,46 @@ on, every `/owner/repo/...` path below the mount point is proxied, so it will
 shadow real paths if you mount at `GHP_PREFIX=/` on a domain that serves
 anything else. The prefix and the token still gate access.
 
+## Status page
+
+<a id="status-page"></a>
+
+A single self-contained page — no external assets, no database, counters held in
+memory and reset on restart: requests and bytes served, denials by reason,
+targets by URL kind, top repositories, the last 25 requests, a chart of the last
+hour, and the configuration the process is actually running with. The token is
+not on it.
+
+```bash
+GHP_STATUS_PATH=/ghp-status    # off unless this is set
+```
+
+`https://sub.example.com/ghp-status` then serves the page, with
+`/ghp-status/json` (what the page polls, every 5 s) and `/ghp-status/metrics`
+(Prometheus text format) beside it.
+
+The path is a full path from the site root rather than something under
+`GHP_PREFIX`, so it is one `location` for the reverse proxy to guard:
+
+| `GHP_STATUS_AUTH` | |
+|---|---|
+| `token` (default) | the proxy's own credential: any of the [four ways](#how-the-token-is-passed), plus `?token=...` for opening it in a browser |
+| `none` | the proxy checks nothing — for when tinyauth, basic auth or an SSO forward-auth already guards that location. Config in [docs/nginx.md](docs/nginx.md) |
+
+Unset, everything under the status path answers the same `404` as the rest of
+the service, and the same goes for a wrong token or an unknown sub-path.
+
+The admin listener carries the same thing unconditionally at `/status`,
+`/status/json` and `/metrics` — it is bound to loopback, so reaching it already
+means being on the host:
+
+```bash
+curl -s 127.0.0.1:8900/metrics
+```
+
+Status page requests are never counted as traffic; the page polling itself would
+otherwise be the only thing on the chart.
+
 ## Running without a token
 
 `GHP_ALLOW_ANONYMOUS=1` disables authentication entirely. `GHP_TOKEN` must then
@@ -220,6 +261,8 @@ All of them are environment variables; the full annotated list is in
 | `GHP_SIZE_LIMIT` | `0` | over the limit → `302` to the real GitHub. `512MB`, `2GB` |
 | `GHP_REDIRECT_HOSTS` | GitHub CDNs | where redirects may be followed (**replaces** the default) |
 | `GHP_MAX_REDIRECTS` | `5` | |
+| `GHP_STATUS_PATH` | empty | path of the [status page](#status-page); empty disables it |
+| `GHP_STATUS_AUTH` | `token` | `none` leaves the page to the reverse proxy's own authentication |
 | `GHP_CORS` | `0` | allow `fetch()` from a browser |
 | `GHP_LOG_TARGETS` | `0` | log upstream URLs (with a token in the path, that logs secrets) |
 | `GHP_ALLOW_ANONYMOUS` | `0` | disable authentication — open relay |
@@ -241,6 +284,26 @@ Locally without Docker:
 GHP_TOKEN=local-dev-token-0123456789 GHP_PREFIX=/ivanghproxy/ \
 GHP_LISTEN=127.0.0.1:8899 ./bin/gh-proxy
 ```
+
+### Images
+
+| Tag | Built from |
+|---|---|
+| `ghcr.io/prettyleaf/gh-proxy:latest`, `:X.Y.Z` | a `v*` tag ([docker.yml](.github/workflows/docker.yml)) |
+| `ghcr.io/prettyleaf/gh-proxy:dev` | every push to `dev`, once tests pass ([build-dev.yml](.github/workflows/build-dev.yml)) |
+| `ghcr.io/prettyleaf/gh-proxy:dev-<sha>` | the same build, pinned to its commit |
+
+The dev image reports `dev-<sha>` as its version, on `/healthz` and on the
+status page, so a running container names the commit it came from. To follow it,
+change the image in `docker-compose.yml` and pull:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Both workflows also run from the Actions tab (`workflow_dispatch`). Setting the
+`TELEGRAM_TOKEN`, `TELEGRAM_CHAT_ID` and `TELEGRAM_TOPIC_ID` secrets turns on
+build notifications; without them those steps skip silently.
 
 ## License
 

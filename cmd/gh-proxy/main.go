@@ -15,8 +15,10 @@ import (
 
 	"github.com/prettyleaf/gh-proxy/internal/config"
 	"github.com/prettyleaf/gh-proxy/internal/ghcli"
+	"github.com/prettyleaf/gh-proxy/internal/metrics"
 	"github.com/prettyleaf/gh-proxy/internal/proxy"
 	"github.com/prettyleaf/gh-proxy/internal/server"
+	"github.com/prettyleaf/gh-proxy/internal/status"
 )
 
 // version is overridden at build time with -ldflags "-X main.version=...".
@@ -90,9 +92,12 @@ func run() error {
 		Logger:                log,
 	})
 
+	m := metrics.New(version)
+	info := server.StatusInfo(cfg)
+
 	public := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: server.New(cfg, p, log),
+		Handler: server.New(cfg, p, m, log),
 		// No WriteTimeout on purpose: it is an absolute deadline on the whole
 		// response, which would sever long release downloads and idle git
 		// fetches. ReadHeaderTimeout covers the slowloris case instead.
@@ -103,7 +108,7 @@ func run() error {
 
 	admin := &http.Server{
 		Addr:              cfg.AdminListen,
-		Handler:           adminHandler(),
+		Handler:           adminHandler(m, info),
 		ReadHeaderTimeout: 5 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelDebug),
 	}
@@ -113,12 +118,18 @@ func run() error {
 		"listen", cfg.Listen,
 		"admin_listen", cfg.AdminListen,
 		"prefix", cfg.Prefix,
-		"auth", authMode(cfg),
-		"upstream", upstreamMode(cfg, upstreamToken != nil),
+		"auth", info.Auth,
+		"upstream", info.Upstream,
 		"allow_list", cfg.AllowList.String(),
 		"deny_list", cfg.DenyList.String(),
 		"size_limit", cfg.SizeLimit,
 	)
+	if cfg.StatusPath != "" {
+		log.Info("status page enabled", "path", cfg.StatusPath, "auth", cfg.StatusAuth)
+		if cfg.StatusAuth == config.StatusAuthNone {
+			log.Warn("the status page is served with no authentication of its own: whatever guards that path in the reverse proxy is the only thing between it and the internet")
+		}
+	}
 	if cfg.AllowAnonymous {
 		log.Warn("running without authentication: anyone who can reach this listener can use it as a GitHub relay")
 		if cfg.UpstreamToken != "" || upstreamToken != nil {
@@ -152,12 +163,25 @@ func serve(s *http.Server, name string, errCh chan<- error) {
 // adminHandler serves the health check on a listener of its own. Putting it
 // under the public mount prefix would hand an unauthenticated prober a reliable
 // way to confirm the service exists.
-func adminHandler() http.Handler {
+//
+// The status page and the metrics live here unconditionally: this listener is
+// bound to loopback, so reaching it already means being on the host. The public
+// copy under GHP_STATUS_PATH is the one that has to be configured on purpose.
+func adminHandler(m *metrics.Metrics, info status.Info) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = fmt.Fprintf(w, "ok %s\n", version)
 	})
+
+	h := status.New(m, info)
+	// Both patterns, so ServeMux answers "/status" itself instead of bouncing
+	// it to "/status/" with a redirect.
+	mux.Handle("/status", http.StripPrefix("/status", h))
+	mux.Handle("/status/", http.StripPrefix("/status", h))
+	// The handler routes on its own path, so "/metrics" reaches the Prometheus
+	// rendering unstripped.
+	mux.Handle("/metrics", h)
 	return mux
 }
 
@@ -181,24 +205,6 @@ func upstreamCredential(ctx context.Context, cfg *config.Config, log *slog.Logge
 	}
 	go src.Refresh(ctx)
 	return src.Token, nil
-}
-
-func authMode(cfg *config.Config) string {
-	if cfg.AllowAnonymous {
-		return "anonymous"
-	}
-	return "token"
-}
-
-func upstreamMode(cfg *config.Config, fromGH bool) string {
-	switch {
-	case fromGH:
-		return "gh-cli"
-	case cfg.UpstreamToken != "":
-		return "token"
-	default:
-		return "none"
-	}
 }
 
 func newLogger(level string) *slog.Logger {
