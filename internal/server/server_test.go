@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/prettyleaf/gh-proxy/internal/config"
+	"github.com/prettyleaf/gh-proxy/internal/metrics"
 	"github.com/prettyleaf/gh-proxy/internal/proxy"
 	"github.com/prettyleaf/gh-proxy/internal/server"
 )
@@ -124,7 +125,7 @@ func newHandler(t *testing.T, f *fakeGitHub, mutate func(*config.Config)) http.H
 		BaseTransport: f.transport(),
 		Logger:        discardLogger(),
 	})
-	return server.New(cfg, p, discardLogger())
+	return server.New(cfg, p, metrics.New("test"), discardLogger())
 }
 
 // do runs one request through the handler.

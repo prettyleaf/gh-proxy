@@ -45,6 +45,12 @@ type Config struct {
 	MaxRedirects  int
 	SizeLimit     int64 // 0 disables the limit
 
+	// StatusPath is the absolute path the status page answers on, outside the
+	// mount prefix so a reverse proxy can guard that one location. Empty
+	// disables the page entirely, which is the default.
+	StatusPath string
+	StatusAuth string // "token" (the proxy's own credential) or "none"
+
 	CORS       bool
 	LogTargets bool
 	LogLevel   string
@@ -55,6 +61,16 @@ type Config struct {
 	ResponseHeaderTimeout time.Duration
 	ShutdownTimeout       time.Duration
 }
+
+// How the status page is authenticated.
+const (
+	// StatusAuthToken requires the same credential as the proxy itself.
+	StatusAuthToken = "token"
+	// StatusAuthNone serves the page to anyone who reaches the path, on the
+	// assumption that something in front (tinyauth, basic auth, an SSO
+	// forward-auth) decides who that is.
+	StatusAuthNone = "none"
+)
 
 // Where the upstream GitHub credential is read from.
 const (
@@ -137,6 +153,17 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	if c.StatusPath, err = normalizeStatusPath(env("GHP_STATUS_PATH", "")); err != nil {
+		return nil, err
+	}
+	c.StatusAuth = strings.ToLower(env("GHP_STATUS_AUTH", StatusAuthToken))
+	switch c.StatusAuth {
+	case StatusAuthToken, StatusAuthNone:
+	default:
+		return nil, fmt.Errorf("GHP_STATUS_AUTH must be %q or %q, got %q",
+			StatusAuthToken, StatusAuthNone, c.StatusAuth)
+	}
+
 	if c.MaxRedirects, err = envInt("GHP_MAX_REDIRECTS", 5); err != nil {
 		return nil, err
 	}
@@ -208,6 +235,32 @@ func normalizePrefix(p string) (string, error) {
 	}
 	if strings.Contains(p, "//") {
 		return "", fmt.Errorf("GHP_PREFIX must not contain empty segments, got %q", p)
+	}
+	return p, nil
+}
+
+// normalizeStatusPath validates the status page's mount point. It is a full
+// path from the site root rather than something under GHP_PREFIX, because the
+// point of configuring it is to hand a reverse proxy one `location` to put
+// authentication in front of; a path that moved with the token could not be
+// written into that config. Empty means the page is off.
+func normalizeStatusPath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(p, "?# ") {
+		return "", fmt.Errorf("GHP_STATUS_PATH must be a plain path, got %q", p)
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = strings.TrimRight(p, "/")
+	if p == "" {
+		return "", fmt.Errorf("GHP_STATUS_PATH must not be the site root")
+	}
+	if strings.Contains(p, "//") {
+		return "", fmt.Errorf("GHP_STATUS_PATH must not contain empty segments, got %q", p)
 	}
 	return p, nil
 }

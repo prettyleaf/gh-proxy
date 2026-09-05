@@ -21,12 +21,15 @@ lint: vet
 tidy:
 	go mod tidy
 
-# Run locally with a throwaway token; prints the base URL to use.
+# Run locally with a throwaway token; prints the base URL and the status page.
 run: build
 	@GHP_TOKEN=$${GHP_TOKEN:-local-dev-token-0123456789}; \
 	 PREFIX=$${GHP_PREFIX:-/ivanghproxy/}; \
-	 echo "base URL: http://127.0.0.1:8899$$PREFIX$$GHP_TOKEN/"; \
-	 GHP_TOKEN=$$GHP_TOKEN GHP_PREFIX=$$PREFIX GHP_LISTEN=127.0.0.1:8899 ./bin/gh-proxy
+	 STATUS=$${GHP_STATUS_PATH:-/ghp-status}; \
+	 echo "base URL:    http://127.0.0.1:8899$$PREFIX$$GHP_TOKEN/"; \
+	 echo "status page: http://127.0.0.1:8899$$STATUS?token=$$GHP_TOKEN"; \
+	 GHP_TOKEN=$$GHP_TOKEN GHP_PREFIX=$$PREFIX GHP_LISTEN=127.0.0.1:8899 \
+	 GHP_STATUS_PATH=$$STATUS ./bin/gh-proxy
 
 docker:
 	docker build --build-arg VERSION=$(VERSION) -t gh-proxy:$(VERSION) -t gh-proxy:latest .

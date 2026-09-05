@@ -96,6 +96,15 @@ func (a *Authenticator) checkHeaders(h http.Header) bool {
 	return false
 }
 
+// Match reports whether a bare string is the token, in constant time. It exists
+// for the one caller that receives the credential outside the request pipeline
+// — the status page, which a browser can only reach with the token in the query
+// string — and always reports false when authentication is disabled, so an
+// anonymous instance never appears to accept a credential it does not have.
+func (a *Authenticator) Match(candidate string) bool {
+	return a.equal(candidate)
+}
+
 func (a *Authenticator) equal(candidate string) bool {
 	if len(a.token) == 0 || candidate == "" {
 		return false

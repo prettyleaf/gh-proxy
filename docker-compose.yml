@@ -24,8 +24,7 @@ services:
     hostname: gh-proxy
     <<: [*common, *logging, *env]
     ports:
-      - "127.0.0.1:8899:8899" # Loopback only. nginx is the sole thing that should be able to reach this; publishing on 0.0.0.0 would expose the proxy on a port that bypasses every rate limit and log setting configured in nginx.
-    read_only: true
+      - "127.0.0.1:8899:8899"
     cap_drop: ["ALL"]
     security_opt: ["no-new-privileges:true"]
     healthcheck:
