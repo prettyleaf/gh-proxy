@@ -31,8 +31,9 @@ type Server struct {
 }
 
 // New builds the public handler. m may be nil, in which case nothing is
-// counted and the status page is not served.
-func New(cfg *config.Config, p *proxy.Proxy, m *metrics.Metrics, log *slog.Logger) *Server {
+// counted and the status page is not served. b is the build metadata the status
+// page's header displays.
+func New(cfg *config.Config, p *proxy.Proxy, m *metrics.Metrics, b status.Build, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -46,7 +47,7 @@ func New(cfg *config.Config, p *proxy.Proxy, m *metrics.Metrics, log *slog.Logge
 	if m != nil && cfg.StatusPath != "" {
 		// Mounted with its own path stripped, so the handler only ever sees
 		// "", "/json" or "/metrics" and does not need to know where it lives.
-		s.status = http.StripPrefix(cfg.StatusPath, status.New(m, StatusInfo(cfg)))
+		s.status = http.StripPrefix(cfg.StatusPath, status.New(m, StatusInfo(cfg), b))
 	}
 	return s
 }

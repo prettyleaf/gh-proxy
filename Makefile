@@ -1,5 +1,13 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+# The rest of what the status page's build popover shows. BUILD_NUMBER is a CI
+# run number and stays empty locally; the page hides the rows it has no value for.
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null)
+BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+BUILD_NUMBER ?=
+LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) \
+	-X main.branch=$(BRANCH) -X main.buildTime=$(BUILD_TIME) \
+	-X main.buildNumber=$(BUILD_NUMBER)
 
 .PHONY: build test race vet lint tidy run docker up down logs token clean
 
@@ -32,7 +40,10 @@ run: build
 	 GHP_STATUS_PATH=$$STATUS ./bin/gh-proxy
 
 docker:
-	docker build --build-arg VERSION=$(VERSION) -t gh-proxy:$(VERSION) -t gh-proxy:latest .
+	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) \
+		--build-arg BRANCH=$(BRANCH) --build-arg BUILD_TIME=$(BUILD_TIME) \
+		--build-arg BUILD_NUMBER=$(BUILD_NUMBER) \
+		-t gh-proxy:$(VERSION) -t gh-proxy:latest .
 
 up:
 	docker compose up -d --build

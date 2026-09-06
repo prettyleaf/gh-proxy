@@ -115,6 +115,10 @@ jobs:
             org.opencontainers.image.created=${{ steps.meta.outputs.build_time }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.sha_short }}
+            BRANCH=${{ github.ref_name }}
+            BUILD_TIME=${{ steps.meta.outputs.build_time }}
+            BUILD_NUMBER=${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Keeps the package listing to the two real platforms instead of
