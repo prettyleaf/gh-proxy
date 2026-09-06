@@ -45,15 +45,21 @@ header .spacer{flex:1}
 .pill:focus-visible{outline:2px solid var(--series);outline-offset:2px}
 .pill svg{width:15px;height:15px;flex:none;display:block}
 .pill .n{font-variant-numeric:tabular-nums}
-.pill.round{padding:0 9px}
 /* A release waiting on GitHub is the one thing in this header worth a colour
    and a heartbeat; a current build stays plain. */
 #build-btn.outdated{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent);
   animation:pulse 2.6s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
-#refresh.busy svg{animation:spin .7s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){#build-btn.outdated,#refresh.busy svg{animation:none}}
+@media (prefers-reduced-motion:reduce){#build-btn.outdated{animation:none}}
+/* The poll rate replaces the manual refresh: the page has no other cadence,
+   so the select is the whole control and carries the pill itself. */
+.pill.select{gap:6px;padding-right:9px}
+.pill.select:focus-within{outline:2px solid var(--series);outline-offset:2px}
+.pill select{appearance:none;-webkit-appearance:none;background:none;border:0;outline:none;
+  margin:0;padding:0;color:inherit;font:inherit;font-size:12px;line-height:1;
+  cursor:pointer;font-variant-numeric:tabular-nums;min-width:50px}
+.pill select option{background:var(--surface);color:var(--ink)}
+.pill .caret{width:9px;height:9px;opacity:.55}
 .pop{position:absolute;top:calc(100% + 8px);right:0;z-index:9;min-width:252px;
   max-width:min(320px,calc(100vw - 40px));background:var(--surface);
   border:1px solid var(--border);border-radius:10px;padding:14px 16px;
@@ -128,11 +134,8 @@ footer a{color:var(--ink2)}
     <div class="tools">
       <button class="pill" id="build-btn" type="button" aria-haspopup="dialog" aria-expanded="false"
               aria-controls="build-pop" title="Build information">
-        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <rect x="2.5" y="5.5" width="1.5" height="5" rx=".75"/>
-          <rect x="6" y="3" width="1.5" height="10" rx=".75"/>
-          <rect x="9.5" y="4.5" width="1.5" height="7" rx=".75"/>
-          <rect x="13" y="6" width="1.5" height="4" rx=".75"/>
+        <svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+          <path d="M12.59 2.59A2 2 0 0 0 11.17 2H4a2 2 0 0 0-2 2v7.17a2 2 0 0 0 .59 1.42l8.7 8.7a2.43 2.43 0 0 0 3.42 0l6.58-6.58a2.43 2.43 0 0 0 0-3.42zM7.5 9A1.5 1.5 0 1 0 7.5 6a1.5 1.5 0 0 0 0 3z"/>
         </svg>
         <span id="build-version">…</span>
       </button>
@@ -145,13 +148,24 @@ footer a{color:var(--ink2)}
         <span class="n" id="star-count">—</span>
       </a>
 
-      <button class="pill round" id="refresh" type="button" title="Refresh now" aria-label="Refresh now">
+      <label class="pill select" title="Auto-refresh interval">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M11.68 4.32 A5.2 5.2 0 1 1 4.32 4.32"/>
-          <path d="M4.32 7.02 L4.32 4.32 L1.62 4.32"/>
+          <circle cx="8" cy="8" r="6.1"/>
+          <path d="M8 4.4 L8 8 L10.6 9.4"/>
         </svg>
-      </button>
+        <select id="rate" aria-label="Auto-refresh interval">
+          <option value="500">500ms</option>
+          <option value="1000">1000ms</option>
+          <option value="2000">2000ms</option>
+          <option value="5000">5000ms</option>
+          <option value="10000">10000ms</option>
+        </select>
+        <svg class="caret" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3.5 6 L8 10.5 L12.5 6"/>
+        </svg>
+      </label>
 
       <div class="pop" id="build-pop" role="dialog" aria-label="Build information" hidden>
         <h3>Build</h3>
@@ -493,16 +507,6 @@ pop.addEventListener("click", (e) => e.stopPropagation());
 document.addEventListener("click", () => showPop(false));
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") showPop(false); });
 
-$("refresh").addEventListener("click", async () => {
-  const b = $("refresh");
-  if (b.classList.contains("busy")) return;
-  b.classList.add("busy");
-  // The counters are re-read immediately; the GitHub half keeps its cache
-  // unless it has gone stale, so leaning on the button cannot burn the quota.
-  await Promise.all([tick(), checkGitHub(false)]);
-  setTimeout(() => b.classList.remove("busy"), 300);
-});
-
 /* ---------- polling ---------- */
 let failures = 0;
 function live(ok){
@@ -544,8 +548,30 @@ function render(d){
 // rather than scaling the type down with it.
 window.addEventListener("resize", () => { if (last) chart(last.history); });
 
+/* The poll rate is picked in the header and remembered per browser; only the
+   local /json endpoint follows it, so a fast rate never touches GitHub. */
+const RATES = [500, 1000, 2000, 5000, 10000], RATE_DEFAULT = 5000, RATE_KEY = "ghp:rate";
+const rateSel = $("rate");
+let timer = null;
+function setRate(ms){
+  clearInterval(timer);
+  timer = setInterval(() => { if (!document.hidden) tick(); }, ms);
+}
+
+let saved = null;
+try { saved = parseInt(localStorage.getItem(RATE_KEY), 10); } catch (e) {}
+const rate0 = RATES.includes(saved) ? saved : RATE_DEFAULT;
+rateSel.value = String(rate0);
+
+rateSel.addEventListener("change", () => {
+  const ms = parseInt(rateSel.value, 10);
+  try { localStorage.setItem(RATE_KEY, String(ms)); } catch (e) {}
+  setRate(ms);
+  tick();
+});
+
 tick();
-setInterval(() => { if (!document.hidden) tick(); }, 5000);
+setRate(rate0);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
 </script>
 </body>
