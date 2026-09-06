@@ -41,6 +41,13 @@ jobs:
             type=ref,event=branch
             type=sha,format=short
 
+      # What the status page's build popover shows, alongside the version.
+      - name: Prepare build metadata
+        id: build
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -49,7 +56,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ steps.meta.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.build.outputs.sha_short }}
+            BRANCH=${{ github.ref_name }}
+            BUILD_TIME=${{ steps.build.outputs.build_time }}
+            BUILD_NUMBER=${{ github.run_number }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Keeps the package listing to the two real platforms instead of

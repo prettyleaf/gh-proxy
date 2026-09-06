@@ -152,6 +152,15 @@ GHP_STATUS_PATH=/ghp-status    # off unless this is set
 `/ghp-status/json` (what the page polls, every 5 s) and `/ghp-status/metrics`
 (Prometheus text format) beside it.
 
+The header carries the running version; clicking it opens the build behind it —
+branch, commit, build time, CI run number — next to the repository's star count
+and a refresh button for when five seconds is too long to wait. The version goes
+amber and pulses when a newer release exists. Those two numbers are the only
+thing on the page that comes from outside, and the *browser* fetches them
+straight from api.github.com, cached for half an hour: the proxy itself makes no
+such call, and a viewer who cannot reach GitHub gets the whole page anyway,
+without the counts.
+
 The path is a full path from the site root rather than something under
 `GHP_PREFIX`, so it is one `location` for the reverse proxy to guard:
 

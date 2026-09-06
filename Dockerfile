@@ -13,11 +13,19 @@ COPY cmd ./cmd
 COPY internal ./internal
 
 ARG VERSION=dev
+# Provenance for the status page's build popover. All optional: an unset one
+# just leaves that row off the page.
+ARG COMMIT=
+ARG BRANCH=
+ARG BUILD_TIME=
+ARG BUILD_NUMBER=
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -trimpath \
-        -ldflags "-s -w -X main.version=${VERSION}" \
+        -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} \
+                  -X main.branch=${BRANCH} -X main.buildTime=${BUILD_TIME} \
+                  -X main.buildNumber=${BUILD_NUMBER}" \
         -o /out/gh-proxy ./cmd/gh-proxy
 
 # scratch: no shell, no package manager, nothing to pivot to if the proxy is

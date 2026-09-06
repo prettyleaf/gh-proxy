@@ -39,21 +39,41 @@ type Info struct {
 	CORS         bool     `json:"cors"`
 }
 
+// Build is where this binary came from: what the header's version chip shows,
+// and what its popover expands into. Every field but the version is set with
+// -ldflags at build time, so a plain `go build` leaves them empty and the page
+// omits the rows.
+//
+// Repo is the GitHub repository the header links to for the star count and the
+// latest release, as "owner/name". It is the only field the page sends anywhere:
+// the browser asks api.github.com about it directly, so an instance with no
+// outbound access from the operator's browser simply shows no counts.
+type Build struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	Branch  string `json:"branch,omitempty"`
+	Time    string `json:"time,omitempty"`
+	Number  string `json:"number,omitempty"`
+	Repo    string `json:"repo,omitempty"`
+}
+
 // Handler answers the status path and everything under it.
 type Handler struct {
-	m    *metrics.Metrics
-	info Info
+	m     *metrics.Metrics
+	info  Info
+	build Build
 }
 
 // New builds the handler. It expects to be mounted with the status path already
 // stripped, so r.URL.Path is "", "/json" or "/metrics".
-func New(m *metrics.Metrics, info Info) *Handler {
-	return &Handler{m: m, info: info}
+func New(m *metrics.Metrics, info Info, build Build) *Handler {
+	return &Handler{m: m, info: info, build: build}
 }
 
 type payload struct {
 	metrics.Snapshot
-	Config Info `json:"config"`
+	Config Info  `json:"config"`
+	Build  Build `json:"build"`
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +101,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) writeJSON(w http.ResponseWriter) {
 	// Rendered into a buffer first so a marshalling error cannot leave a
 	// half-written 200 on the wire.
-	body, err := json.Marshal(payload{Snapshot: h.m.Snapshot(), Config: h.info})
+	body, err := json.Marshal(payload{Snapshot: h.m.Snapshot(), Config: h.info, Build: h.build})
 	if err != nil {
 		http.Error(w, "snapshot failed", http.StatusInternalServerError)
 		return
@@ -97,8 +117,9 @@ func (h *Handler) writeProm(w http.ResponseWriter) {
 	s := h.m.Snapshot()
 	var b bytes.Buffer
 
-	metric(&b, "ghproxy_build_info", "gauge", "Version of the running binary.")
-	fmt.Fprintf(&b, "ghproxy_build_info{version=%s} 1\n", quote(s.Version))
+	metric(&b, "ghproxy_build_info", "gauge", "Provenance of the running binary.")
+	fmt.Fprintf(&b, "ghproxy_build_info{version=%s,commit=%s,branch=%s} 1\n",
+		quote(s.Version), quote(h.build.Commit), quote(h.build.Branch))
 
 	simple(&b, "ghproxy_uptime_seconds", "gauge", "Seconds since start.", s.Uptime)
 	simple(&b, "ghproxy_requests_in_flight", "gauge", "Requests currently being served.", float64(s.InFlight))

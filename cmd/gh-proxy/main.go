@@ -21,8 +21,31 @@ import (
 	"github.com/prettyleaf/gh-proxy/internal/status"
 )
 
-// version is overridden at build time with -ldflags "-X main.version=...".
-var version = "dev"
+// Build metadata, all of it overridden at build time with
+// -ldflags "-X main.<name>=...". Everything but the version is empty in a plain
+// `go build`, and the status page hides the rows it has no value for.
+var (
+	version     = "dev"
+	commit      = ""
+	branch      = ""
+	buildTime   = "" // RFC 3339, UTC
+	buildNumber = "" // CI run number
+	// repo is the GitHub repository the status page's header links to, for the
+	// star count and the latest release. A fork overrides it the same way.
+	repo = "prettyleaf/gh-proxy"
+)
+
+// buildInfo is what the header's version chip and its popover display.
+func buildInfo() status.Build {
+	return status.Build{
+		Version: version,
+		Commit:  commit,
+		Branch:  branch,
+		Time:    buildTime,
+		Number:  buildNumber,
+		Repo:    repo,
+	}
+}
 
 func main() {
 	// The scratch-based image has no shell and no curl, so the binary probes
@@ -97,7 +120,7 @@ func run() error {
 
 	public := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: server.New(cfg, p, m, log),
+		Handler: server.New(cfg, p, m, buildInfo(), log),
 		// No WriteTimeout on purpose: it is an absolute deadline on the whole
 		// response, which would sever long release downloads and idle git
 		// fetches. ReadHeaderTimeout covers the slowloris case instead.
@@ -108,7 +131,7 @@ func run() error {
 
 	admin := &http.Server{
 		Addr:              cfg.AdminListen,
-		Handler:           adminHandler(m, info),
+		Handler:           adminHandler(m, info, buildInfo()),
 		ReadHeaderTimeout: 5 * time.Second,
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelDebug),
 	}
@@ -167,14 +190,14 @@ func serve(s *http.Server, name string, errCh chan<- error) {
 // The status page and the metrics live here unconditionally: this listener is
 // bound to loopback, so reaching it already means being on the host. The public
 // copy under GHP_STATUS_PATH is the one that has to be configured on purpose.
-func adminHandler(m *metrics.Metrics, info status.Info) http.Handler {
+func adminHandler(m *metrics.Metrics, info status.Info, b status.Build) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = fmt.Fprintf(w, "ok %s\n", version)
 	})
 
-	h := status.New(m, info)
+	h := status.New(m, info, b)
 	// Both patterns, so ServeMux answers "/status" itself instead of bouncing
 	// it to "/status/" with a redirect.
 	mux.Handle("/status", http.StripPrefix("/status", h))
