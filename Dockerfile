@@ -2,7 +2,7 @@
 
 # The binary is pure Go, so the build stage always runs on the native
 # architecture of the runner and cross-compiles. No QEMU, no per-arch runners.
-FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 
 RUN apk add --no-cache ca-certificates
 
